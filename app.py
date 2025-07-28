@@ -1118,4 +1118,4 @@ elif st.session_state.active_tab == "Branches":
 
 # Add a footer
 st.markdown("---")
-st.markdown("RFID Inventory Management System © 2023")
+st.markdown("RFID Inventory Management System © 2025")
