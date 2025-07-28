@@ -19,6 +19,28 @@ st.set_page_config(
     layout="wide"
 )
 
+# Example of corrected image saving logic in add_product()
+def add_product(product_id, name, description, category, image=None):
+    if product_id in st.session_state.products:
+        return False, f"Product ID {product_id} already exists"
+
+    image_path = None
+    if image is not None:
+        # Create unique filename and safe path
+        image_filename = f"product_{product_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}.jpg"
+        image_path = os.path.join("data", "images", image_filename)
+        image.save(image_path)
+
+    st.session_state.products[product_id] = {
+        'name': name,
+        'description': description,
+        'category': category,
+        'image': image_path
+    }
+
+    save_data()
+    return True, f"Product {name} added successfully"
+
 # Initialize session state for storing data
 if 'rfid_data' not in st.session_state:
     st.session_state.rfid_data = {}
