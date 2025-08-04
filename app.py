@@ -11,6 +11,7 @@ import plotly.express as px
 from PIL import Image
 import io
 import base64
+import hashlib
 
 # Set page configuration
 st.set_page_config(
@@ -19,27 +20,35 @@ st.set_page_config(
     layout="wide"
 )
 
-# Example of corrected image saving logic in add_product()
-def add_product(product_id, name, description, category, image=None):
-    if product_id in st.session_state.products:
-        return False, f"Product ID {product_id} already exists"
+# User authentication setup
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
 
-    image_path = None
-    if image is not None:
-        # Create unique filename and safe path
-        image_filename = f"product_{product_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}.jpg"
-        image_path = os.path.join("data", "images", image_filename)
-        image.save(image_path)
-
-    st.session_state.products[product_id] = {
-        'name': name,
-        'description': description,
-        'category': category,
-        'image': image_path
+if 'users' not in st.session_state:
+    # Default admin user
+    st.session_state.users = {
+        "admin": {
+            "password": hashlib.sha256("admin123".encode()).hexdigest(),
+            "name": "Admin",
+            "role": "admin"
+        }
     }
 
-    save_data()
-    return True, f"Product {name} added successfully"
+# File path for users
+USERS_PATH = 'data/users.json'
+
+# Create data directory if it doesn't exist
+os.makedirs('data', exist_ok=True)
+os.makedirs('data/images', exist_ok=True)
+
+# File paths
+RFID_DATA_PATH = 'data/rfid_data.json'
+PRODUCTS_PATH = 'data/products.json'
+CATEGORIES_PATH = 'data/categories.json'
+TRANSACTIONS_PATH = 'data/transactions.json'
+SALES_PATH = 'data/sales.json'
+BRANCHES_PATH = 'data/branches.json'
+TRANSFERS_PATH = 'data/transfers.json'
 
 # Initialize session state for storing data
 if 'rfid_data' not in st.session_state:
@@ -63,19 +72,6 @@ if 'transfers' not in st.session_state:
     st.session_state.transfers = []
 if 'active_tab' not in st.session_state:
     st.session_state.active_tab = "Upload"
-
-# Create data directory if it doesn't exist
-os.makedirs('data', exist_ok=True)
-os.makedirs('data/images', exist_ok=True)
-
-# File paths
-RFID_DATA_PATH = 'data/rfid_data.json'
-PRODUCTS_PATH = 'data/products.json'
-CATEGORIES_PATH = 'data/categories.json'
-TRANSACTIONS_PATH = 'data/transactions.json'
-SALES_PATH = 'data/sales.json'
-BRANCHES_PATH = 'data/branches.json'
-TRANSFERS_PATH = 'data/transfers.json'
 
 # Load data from files if they exist
 def load_data():
@@ -106,6 +102,11 @@ def load_data():
     if os.path.exists(TRANSFERS_PATH):
         with open(TRANSFERS_PATH, 'r') as f:
             st.session_state.transfers = json.load(f)
+    
+    # Load users
+    if os.path.exists(USERS_PATH):
+        with open(USERS_PATH, 'r') as f:
+            st.session_state.users = json.load(f)
 
 # Save data to files
 def save_data():
@@ -129,10 +130,13 @@ def save_data():
         
     with open(TRANSFERS_PATH, 'w') as f:
         json.dump(st.session_state.transfers, f)
+    
+    # Save users
+    with open(USERS_PATH, 'w') as f:
+        json.dump(st.session_state.users, f)
 
 # Load data at startup
 load_data()
-
 # Custom CSS
 st.markdown("""
 <style>
@@ -176,35 +180,58 @@ st.markdown("""
         border-radius: 0.25rem;
         margin-bottom: 1rem;
     }
+    .login-container {
+        max-width: 500px;
+        margin: 0 auto;
+        padding: 2rem;
+        border-radius: 1rem;
+        background-color: #f8f9fa;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+    .user-info {
+        padding: 0.5rem 1rem;
+        background-color: #e3f2fd;
+        border-radius: 0.5rem;
+        margin-right: 1rem;
+        font-weight: bold;
+    }
+    .logout-btn {
+        color: white;
+        background-color: #dc3545;
+        padding: 0.5rem 1rem;
+        border-radius: 0.5rem;
+        text-decoration: none;
+    }
+    .logout-btn:hover {
+        background-color: #c82333;
+        text-decoration: none;
+        color: white;
+    }
+    .settings-tab {
+        margin-top: 2rem;
+        padding: 1.5rem;
+        border-radius: 0.5rem;
+        background-color: #f8f9fa;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# Application header
-st.markdown('<div class="main-header">RFID Inventory Management System</div>', unsafe_allow_html=True)
-
-# Navigation tabs
-tabs = ["Upload", "Products", "Categories", "Inventory", "Reports", "Sales", "Branches"]
-cols = st.columns(len(tabs))
-
-for i, tab in enumerate(tabs):
-    if cols[i].button(tab, key=f"tab_{tab}", use_container_width=True):
-        st.session_state.active_tab = tab
-
-st.markdown("---")
-
-# Branch selector (show in all tabs except Branches)
-if st.session_state.active_tab != "Branches" and len(st.session_state.branches) > 0:
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        branch_options = {bid: f"{data['name']}" for bid, data in st.session_state.branches.items()}
-        selected_branch = st.selectbox("Select Branch", list(branch_options.values()), key="branch_selector")
-        selected_branch_id = list(branch_options.keys())[list(branch_options.values()).index(selected_branch)]
-        st.session_state.current_branch = selected_branch_id
-    with col2:
-        st.markdown(f"<div style='padding-top: 2rem;'>Current Branch: <b>{branch_options[selected_branch_id]}</b></div>", unsafe_allow_html=True)
+# Function to add a new user
+def add_user(username, password, name, role="user"):
+    if username in st.session_state.users:
+        return False, f"Username {username} already exists"
     
-    st.markdown("---")
-
+    # Hash the password
+    hashed_password = hashlib.sha256(password.encode()).hexdigest()
+    
+    st.session_state.users[username] = {
+        "password": hashed_password,
+        "name": name,
+        "role": role
+    }
+    
+    save_data()
+    return True, f"User {username} added successfully"
 # Function to add a new RFID tag
 def add_rfid_tag(rfid, product_id, category, branch_id=None, timestamp=None):
     if timestamp is None:
@@ -298,7 +325,6 @@ def transfer_product(rfid, to_branch_id, timestamp=None):
     
     save_data()
     return True, f"Product {product_name} with RFID {rfid} transferred from {st.session_state.branches[from_branch_id]['name']} to {st.session_state.branches[to_branch_id]['name']}"
-
 # Function to process sales Excel file
 def process_sales_excel(df):
     results = []
@@ -439,9 +465,123 @@ def process_excel(df):
             })
     
     return results
+# Login page
+def login_page():
+    st.markdown('<div class="main-header">RFID Inventory Management System</div>', unsafe_allow_html=True)
+    
+    with st.container():
+        st.markdown('<div class="login-container">', unsafe_allow_html=True)
+        st.markdown('<div class="subheader" style="text-align: center;">Login</div>', unsafe_allow_html=True)
+        
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        
+        col1, col2 = st.columns([1, 1])
+        
+        with col1:
+            if st.button("Login", use_container_width=True):
+                if username in st.session_state.users:
+                    hashed_input = hashlib.sha256(password.encode()).hexdigest()
+                    if hashed_input == st.session_state.users[username]["password"]:
+                        st.session_state.authenticated = True
+                        st.session_state.current_user = username
+                        st.session_state.user_role = st.session_state.users[username]["role"]
+                        st.session_state.user_name = st.session_state.users[username]["name"]
+                        st.success("Login successful!")
+                        st.experimental_rerun()
+                    else:
+                        st.error("Incorrect password")
+                else:
+                    st.error("Username not found")
+        
+        with col2:
+            if len(st.session_state.users) == 0:
+                # If no users exist, allow creating the first admin
+                if st.button("Create Admin Account", use_container_width=True):
+                    add_user("admin", "admin123", "Administrator", "admin")
+                    st.success("Admin account created! Username: admin, Password: admin123")
+                    st.info("Please login with these credentials and change the password immediately.")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
 
+# User settings tab
+def settings_tab():
+    st.markdown('<div class="subheader">User Settings</div>', unsafe_allow_html=True)
+    
+    # Change password section
+    with st.expander("Change Password", expanded=True):
+        current_password = st.text_input("Current Password", type="password")
+        new_password = st.text_input("New Password", type="password")
+        confirm_password = st.text_input("Confirm New Password", type="password")
+        
+        if st.button("Change Password"):
+            # Verify current password
+            hashed_current = hashlib.sha256(current_password.encode()).hexdigest()
+            if hashed_current == st.session_state.users[st.session_state.current_user]["password"]:
+                if new_password == confirm_password:
+                    if len(new_password) >= 6:
+                        # Update password
+                        hashed_new = hashlib.sha256(new_password.encode()).hexdigest()
+                        st.session_state.users[st.session_state.current_user]["password"] = hashed_new
+                        save_data()
+                        st.success("Password changed successfully!")
+                    else:
+                        st.error("New password must be at least 6 characters long")
+                else:
+                    st.error("New passwords don't match")
+            else:
+                st.error("Current password is incorrect")
+
+    # User management (admin only)
+    if st.session_state.user_role == "admin":
+        st.markdown('<div class="subheader">User Management</div>', unsafe_allow_html=True)
+        
+        # Add new user
+        with st.expander("Add New User", expanded=False):
+            new_username = st.text_input("Username")
+            new_user_password = st.text_input("User Password", type="password")
+            new_user_name = st.text_input("Full Name")
+            new_user_role = st.selectbox("Role", ["user", "admin"])
+            
+            if st.button("Add User"):
+                if len(new_username) > 0 and len(new_user_password) >= 6 and len(new_user_name) > 0:
+                    success, message = add_user(new_username, new_user_password, new_user_name, new_user_role)
+                    if success:
+                        st.success(message)
+                    else:
+                        st.error(message)
+                else:
+                    st.error("All fields are required. Password must be at least 6 characters.")
+        
+        # List and manage existing users
+        st.markdown("### Existing Users")
+        
+        users_data = []
+        for username, user_data in st.session_state.users.items():
+            users_data.append({
+                "Username": username,
+                "Name": user_data["name"],
+                "Role": user_data["role"]
+            })
+        
+        if users_data:
+            users_df = pd.DataFrame(users_data)
+            st.dataframe(users_df)
+            
+            # Delete user
+            user_to_delete = st.selectbox("Select user to delete", ["-"] + [u for u in st.session_state.users.keys() if u != st.session_state.current_user])
+            
+            if user_to_delete != "-":
+                if st.button("Delete Selected User"):
+                    if user_to_delete != st.session_state.current_user:
+                        del st.session_state.users[user_to_delete]
+                        save_data()
+                        st.success(f"User {user_to_delete} deleted successfully")
+                        st.experimental_rerun()
+                    else:
+                        st.error("You cannot delete your own account")
 # Upload RFID Tags Tab
-if st.session_state.active_tab == "Upload":
+def upload_tab():
     st.markdown('<div class="subheader">Upload RFID Tags</div>', unsafe_allow_html=True)
     
     with st.expander("Instructions", expanded=False):
@@ -565,7 +705,7 @@ if st.session_state.active_tab == "Upload":
             st.error(f"Error processing file: {str(e)}")
 
 # Products Tab
-elif st.session_state.active_tab == "Products":
+def products_tab():
     st.markdown('<div class="subheader">Manage Products</div>', unsafe_allow_html=True)
     
     # Add new product
@@ -662,482 +802,71 @@ elif st.session_state.active_tab == "Products":
                             
                             st.markdown("</div>", unsafe_allow_html=True)
 
-# Categories Tab
-elif st.session_state.active_tab == "Categories":
-    st.markdown('<div class="subheader">Manage Categories</div>', unsafe_allow_html=True)
-    
-    # Add new category
-    with st.expander("Add New Category", expanded=True):
-        category_name = st.text_input("Category Name")
-        
-        if st.button("Add Category"):
-            if not category_name:
-                st.error("Category name is required")
-            else:
-                success, message = add_category(category_name)
-                if success:
-                    st.success(message)
-                else:
-                    st.error(message)
-    
-    # List existing categories
-    st.markdown('<div class="subheader">Existing Categories</div>', unsafe_allow_html=True)
-    
-    if len(st.session_state.categories) == 0:
-        st.info("No categories added yet")
+# Main application function with authentication handling
+def main():
+    if not st.session_state.authenticated:
+        login_page()
     else:
-        # Display categories with product counts
-        category_data = []
-        for category in st.session_state.categories:
-            product_count = sum(1 for data in st.session_state.products.values() if data['category'] == category)
-            rfid_count = sum(1 for data in st.session_state.rfid_data.values() if data['category'] == category)
-            category_data.append({
-                "Category": category,
-                "Products": product_count,
-                "RFID Tags": rfid_count
-            })
-        
-        category_df = pd.DataFrame(category_data)
-        st.dataframe(category_df)
-        
-        # Category visualization
-        if len(category_data) > 0:
-            st.markdown('<div class="subheader">Category Distribution</div>', unsafe_allow_html=True)
-            
-            # Products by category
-            fig1 = px.pie(category_df, values='Products', names='Category', title='Products by Category')
-            st.plotly_chart(fig1)
-            
-            # RFID tags by category
-            fig2 = px.pie(category_df, values='RFID Tags', names='Category', title='RFID Tags by Category')
-            st.plotly_chart(fig2)
-
-# Inventory Tab
-elif st.session_state.active_tab == "Inventory":
-    st.markdown('<div class="subheader">Inventory Management</div>', unsafe_allow_html=True)
-    
-    # Summary metrics
-    total_products = len(st.session_state.products)
-    total_rfid_tags = len(st.session_state.rfid_data)
-    total_categories = len(st.session_state.categories)
-    
-    # Count products in current branch
-    branch_rfid_tags = sum(1 for data in st.session_state.rfid_data.values() if data.get('branch_id') == st.session_state.current_branch)
-    
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total Products", total_products)
-    col2.metric("Total RFID Tags", total_rfid_tags)
-    col3.metric("Branch RFID Tags", branch_rfid_tags)
-    col4.metric("Total Categories", total_categories)
-    
-    # RFID tag search
-    st.markdown('<div class="subheader">Search RFID Tags</div>', unsafe_allow_html=True)
-    search_rfid = st.text_input("Enter RFID Tag")
-    
-    if search_rfid:
-        if search_rfid in st.session_state.rfid_data:
-            tag_data = st.session_state.rfid_data[search_rfid]
-            product_id = tag_data['product_id']
-            
-            if product_id in st.session_state.products:
-                product = st.session_state.products[product_id]
-                
-                st.markdown('<div class="info-box">', unsafe_allow_html=True)
-                st.markdown(f"**RFID Tag:** {search_rfid}")
-                st.markdown(f"**Product:** {product['name']}")
-                st.markdown(f"**Product ID:** {product_id}")
-                st.markdown(f"**Category:** {tag_data['category']}")
-                st.markdown(f"**Added at:** {tag_data['added_at']}")
-                st.markdown('</div>', unsafe_allow_html=True)
-                
-                # Display product image if available
-                if product['image'] and os.path.exists(product['image']):
-                    img = Image.open(product['image'])
-                    st.image(img, width=200)
-            else:
-                st.warning(f"Product ID {product_id} not found")
-        else:
-            st.warning(f"RFID Tag {search_rfid} not found")
-    
-    # RFID tag management
-    st.markdown('<div class="subheader">Manual RFID Tag Entry</div>', unsafe_allow_html=True)
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        manual_rfid = st.text_input("RFID Tag")
-    
-    with col2:
-        if len(st.session_state.products) > 0:
-            product_options = {pid: f"{data['name']} ({pid})" for pid, data in st.session_state.products.items()}
-            selected_product = st.selectbox("Assign to Product", list(product_options.values()))
-            selected_product_id = list(product_options.keys())[list(product_options.values()).index(selected_product)]
-            product_category = st.session_state.products[selected_product_id]['category']
-        else:
-            st.warning("No products available")
-            selected_product_id = None
-            product_category = None
-    
-    if st.button("Add RFID Tag"):
-        if not manual_rfid or not selected_product_id:
-            st.error("RFID Tag and Product selection are required")
-        else:
-            success, message = add_rfid_tag(manual_rfid, selected_product_id, product_category)
-            
-            if success:
-                st.success(message)
-            else:
-                st.error(message)
-
-# Sales Tab
-elif st.session_state.active_tab == "Sales":
-    st.markdown('<div class="subheader">Process Sales</div>', unsafe_allow_html=True)
-    
-    with st.expander("Instructions", expanded=False):
-        st.info("""
-        1. Upload an Excel file containing RFID tags for items being sold.
-        2. The Excel file must have a column named 'rfid'.
-        3. Optional columns include 'sale_price' and 'sale_date'.
-        4. If sale_date is not provided, current date/time will be used.
-        5. The system will mark these items as sold and remove them from inventory.
-        """)
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        # Upload Excel file with sales data
-        uploaded_sales_file = st.file_uploader("Upload Excel file with sold RFID tags", type=["xlsx", "xls"])
-        
-        if uploaded_sales_file is not None:
-            try:
-                df = pd.read_excel(uploaded_sales_file)
-                
-                if 'rfid' not in df.columns:
-                    st.error("The Excel file must contain a column named 'rfid'")
-                else:
-                    # Process the uploaded sales file
-                    if st.button("Process Sales"):
-                        results = process_sales_excel(df)
-                        
-                        # Display results
-                        st.markdown('<div class="subheader">Sales Processing Results</div>', unsafe_allow_html=True)
-                        
-                        # Count statuses
-                        sold_count = sum(1 for r in results if r['status'] == 'sold')
-                        error_count = sum(1 for r in results if r['status'] == 'error')
-                        
-                        # Display summary
-                        col1a, col2a = st.columns(2)
-                        col1a.metric("Successfully Sold", sold_count)
-                        col2a.metric("Errors", error_count)
-                        
-                        # Display tables by status
-                        if sold_count > 0:
-                            with st.expander("Sold Items", expanded=True):
-                                sold_df = pd.DataFrame([r for r in results if r['status'] == 'sold'])
-                                st.dataframe(sold_df)
-                        
-                        if error_count > 0:
-                            with st.expander("Errors", expanded=True):
-                                error_df = pd.DataFrame([r for r in results if r['status'] == 'error'])
-                                st.dataframe(error_df)
-            except Exception as e:
-                st.error(f"Error processing sales file: {str(e)}")
-    
-    with col2:
-        # Manual sale entry
-        st.markdown('<div class="subheader">Manual Sale Entry</div>', unsafe_allow_html=True)
-        
-        manual_sale_rfid = st.text_input("RFID Tag to Sell")
-        manual_sale_price = st.number_input("Sale Price (Optional)", min_value=0.0, step=0.01)
-        
-        if st.button("Process Single Sale"):
-            if not manual_sale_rfid:
-                st.error("RFID Tag is required")
-            else:
-                sale_price = manual_sale_price if manual_sale_price > 0 else None
-                success, message = process_sale(manual_sale_rfid, sale_price)
-                
-                if success:
-                    st.success(message)
-                else:
-                    st.error(message)
-    
-    # Recent sales history
-    st.markdown('<div class="subheader">Recent Sales</div>', unsafe_allow_html=True)
-    
-    if len(st.session_state.sales) > 0:
-        # Get last 10 sales
-        recent_sales = sorted(st.session_state.sales, key=lambda x: x['sale_date'], reverse=True)[:10]
-        recent_sales_df = pd.DataFrame(recent_sales)
-        st.dataframe(recent_sales_df)
-        
-        # Show total sales
-        total_sales = sum(sale.get('sale_price', 0) for sale in st.session_state.sales if sale.get('sale_price') is not None)
-        st.metric("Total Sales Revenue", f"${total_sales:.2f}")
-    else:
-        st.info("No sales recorded yet")
-
-# Reports Tab
-elif st.session_state.active_tab == "Reports":
-    st.markdown('<div class="subheader">Inventory and Sales Reports</div>', unsafe_allow_html=True)
-    
-    report_type = st.radio("Report Type", ["Inventory Transactions", "Sales Analysis"])
-    
-    # Date range selection
-    col1, col2 = st.columns(2)
-    with col1:
-        start_date = st.date_input("Start Date")
-    with col2:
-        end_date = st.date_input("End Date")
-    
-    # Convert to string format for comparison
-    start_date_str = start_date.strftime("%Y-%m-%d")
-    end_date_str = end_date.strftime("%Y-%m-%d")
-    
-    if report_type == "Inventory Transactions":
-        # Filter transactions by date
-        filtered_transactions = [
-            t for t in st.session_state.transactions 
-            if start_date_str <= t['timestamp'].split()[0] <= end_date_str
-        ]
-        
-        if len(filtered_transactions) > 0:
-            # Prepare data for visualization
-            transaction_df = pd.DataFrame(filtered_transactions)
-            
-            # Daily activity chart
-            if len(transaction_df) > 0:
-                transaction_df['date'] = transaction_df['timestamp'].apply(lambda x: x.split()[0])
-                daily_counts = transaction_df.groupby(['date', 'action']).size().reset_index(name='count')
-                
-                fig = px.line(daily_counts, x='date', y='count', color='action', 
-                             title='Daily Inventory Activity',
-                             labels={'count': 'Number of Transactions', 'date': 'Date'})
-                st.plotly_chart(fig)
-            
-            # Transaction table
-            st.markdown('<div class="subheader">Transaction Log</div>', unsafe_allow_html=True)
-            
-            if len(filtered_transactions) > 0:
-                # Enhance transaction data with product info
-                for t in filtered_transactions:
-                    product_id = t['product_id']
-                    if product_id in st.session_state.products:
-                        t['product_name'] = st.session_state.products[product_id]['name']
-                    else:
-                        t['product_name'] = "Unknown"
-                
-                transaction_df = pd.DataFrame(filtered_transactions)
-                st.dataframe(transaction_df)
-                
-                # Export option
-                if st.button("Export Transactions to Excel"):
-                    # Convert DataFrame to Excel
-                    output = io.BytesIO()
-                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                        transaction_df.to_excel(writer, index=False)
-                    
-                    # Create a download link
-                    excel_data = output.getvalue()
-                    b64 = base64.b64encode(excel_data).decode()
-                    href = f'<a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}" download="inventory_report.xlsx">Download Excel Report</a>'
-                    st.markdown(href, unsafe_allow_html=True)
-            else:
-                st.info(f"No transactions found between {start_date_str} and {end_date_str}")
-        else:
-            st.info("No transaction data available for the selected date range")
-            
-    else:  # Sales Analysis
-        # Filter sales by date
-        filtered_sales = [
-            s for s in st.session_state.sales 
-            if start_date_str <= s['sale_date'].split()[0] <= end_date_str
-        ]
-        
-        if len(filtered_sales) > 0:
-            # Prepare sales data for visualization
-            sales_df = pd.DataFrame(filtered_sales)
-            
-            # Summary metrics
-            total_sales = sum(s.get('sale_price', 0) for s in filtered_sales if s.get('sale_price') is not None)
-            total_items = len(filtered_sales)
-            avg_price = total_sales / total_items if total_items > 0 else 0
-            
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Total Sales", f"${total_sales:.2f}")
-            col2.metric("Items Sold", total_items)
-            col3.metric("Average Price", f"${avg_price:.2f}")
-            
-            # Sales by category
-            if len(sales_df) > 0:
-                sales_df['date'] = sales_df['sale_date'].apply(lambda x: x.split()[0])
-                
-                # Create date for daily sales chart
-                if 'sale_price' in sales_df.columns:
-                    daily_sales = sales_df.groupby('date')['sale_price'].sum().reset_index()
-                    
-                    fig1 = px.line(daily_sales, x='date', y='sale_price', 
-                                  title='Daily Sales Revenue',
-                                  labels={'sale_price': 'Revenue ($)', 'date': 'Date'})
-                    st.plotly_chart(fig1)
-                
-                # Category pie chart
-                category_sales = sales_df.groupby('category').size().reset_index(name='count')
-                fig2 = px.pie(category_sales, values='count', names='category', 
-                             title='Sales by Product Category')
-                st.plotly_chart(fig2)
-                
-                # Sales table
-                st.markdown('<div class="subheader">Sales Details</div>', unsafe_allow_html=True)
-                st.dataframe(sales_df)
-                
-                # Export option
-                if st.button("Export Sales to Excel"):
-                    # Convert DataFrame to Excel
-                    output = io.BytesIO()
-                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                        sales_df.to_excel(writer, index=False)
-                    
-                    # Create a download link
-                    excel_data = output.getvalue()
-                    b64 = base64.b64encode(excel_data).decode()
-                    href = f'<a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}" download="sales_report.xlsx">Download Sales Report</a>'
-                    st.markdown(href, unsafe_allow_html=True)
-            
-        else:
-            st.info(f"No sales data available between {start_date_str} and {end_date_str}")
-
-# Branches Tab
-elif st.session_state.active_tab == "Branches":
-    st.markdown('<div class="subheader">Manage Branches</div>', unsafe_allow_html=True)
-    
-    # Add new branch
-    with st.expander("Add New Branch", expanded=True):
-        branch_id = st.text_input("Branch ID")
-        branch_name = st.text_input("Branch Name")
-        branch_address = st.text_area("Branch Address")
-        
-        if st.button("Add Branch"):
-            if not branch_id or not branch_name:
-                st.error("Branch ID and Name are required")
-            else:
-                success, message = add_branch(branch_id, branch_name, branch_address)
-                if success:
-                    st.success(message)
-                else:
-                    st.error(message)
-    
-    # List existing branches
-    st.markdown('<div class="subheader">Existing Branches</div>', unsafe_allow_html=True)
-    
-    if len(st.session_state.branches) == 0:
-        st.info("No branches added yet")
-    else:
-        # Display branches in a table
-        branches_data = []
-        for bid, data in st.session_state.branches.items():
-            # Count products in this branch
-            product_count = sum(1 for data in st.session_state.rfid_data.values() if data.get('branch_id') == bid)
-            branches_data.append({
-                "Branch ID": bid,
-                "Name": data['name'],
-                "Address": data['address'],
-                "Products": product_count,
-                "Created At": data['created_at']
-            })
-        
-        branches_df = pd.DataFrame(branches_data)
-        st.dataframe(branches_df)
-    
-    # Transfer products between branches
-    st.markdown('<div class="subheader">Transfer Products Between Branches</div>', unsafe_allow_html=True)
-    
-    if len(st.session_state.branches) < 2:
-        st.warning("You need at least 2 branches to transfer products")
-    else:
-        col1, col2 = st.columns(2)
+        # Main application layout with user info and logout button
+        col1, col2 = st.columns([10, 2])
         
         with col1:
-            from_branch_options = {bid: f"{data['name']}" for bid, data in st.session_state.branches.items()}
-            selected_from_branch = st.selectbox("From Branch", list(from_branch_options.values()), key="from_branch")
-            selected_from_branch_id = list(from_branch_options.keys())[list(from_branch_options.values()).index(selected_from_branch)]
-            
-            # List products in the selected branch
-            branch_products = {}
-            for rfid, data in st.session_state.rfid_data.items():
-                if data.get('branch_id') == selected_from_branch_id:
-                    product_id = data['product_id']
-                    if product_id in st.session_state.products:
-                        product_name = st.session_state.products[product_id]['name']
-                        branch_products[rfid] = f"{product_name} (RFID: {rfid})"
-            
-            if not branch_products:
-                st.warning(f"No products found in {from_branch_options[selected_from_branch_id]}")
-                selected_products = []
-            else:
-                st.write(f"**Products in {from_branch_options[selected_from_branch_id]}:**")
-                
-                # Allow selecting multiple products
-                select_all_products = st.checkbox("Select all products", key="select_all_from_branch")
-                
-                if select_all_products:
-                    default_selections = list(branch_products.keys())
-                else:
-                    default_selections = []
-                
-                selected_products = st.multiselect(
-                    "Select products to transfer",
-                    options=list(branch_products.keys()),
-                    default=default_selections,
-                    format_func=lambda x: branch_products[x] if x in branch_products else x
-                )
+            st.markdown('<div class="main-header">RFID Inventory Management System</div>', unsafe_allow_html=True)
         
         with col2:
-            # Only show branches other than the source branch
-            to_branch_options = {bid: f"{data['name']}" for bid, data in st.session_state.branches.items() if bid != selected_from_branch_id}
-            
-            if not to_branch_options:
-                st.warning("No other branches available for transfer")
-                selected_to_branch_id = None
-            else:
-                selected_to_branch = st.selectbox("To Branch", list(to_branch_options.values()), key="to_branch")
-                selected_to_branch_id = list(to_branch_options.keys())[list(to_branch_options.values()).index(selected_to_branch)]
-        
-        if selected_products and selected_to_branch_id:
-            if st.button("Transfer Selected Products"):
-                successful_transfers = 0
-                for rfid in selected_products:
-                    success, _ = transfer_product(rfid, selected_to_branch_id)
-                    if success:
-                        successful_transfers += 1
+            st.markdown(
+                f"""
+                <div style="text-align: right; margin-top: 1rem;">
+                    <span class="user-info">{st.session_state.user_name} ({st.session_state.user_role})</span>
+                    <a href="#" id="logout" class="logout-btn">Logout</a>
+                </div>
                 
-                if successful_transfers > 0:
-                    st.success(f"Successfully transferred {successful_transfers} products to {to_branch_options[selected_to_branch_id]}")
-                    # Trigger a rerun to update the UI
-                    st.experimental_rerun()
-                else:
-                    st.error("No products were transferred")
-    
-    # Recent transfers
-    st.markdown('<div class="subheader">Recent Transfers</div>', unsafe_allow_html=True)
-    
-    if len(st.session_state.transfers) == 0:
-        st.info("No transfers recorded yet")
-    else:
-        # Get last 10 transfers
-        recent_transfers = sorted(st.session_state.transfers, key=lambda x: x['timestamp'], reverse=True)[:10]
+                <script>
+                    document.getElementById('logout').addEventListener('click', function(e) {{
+                        e.preventDefault();
+                        window.parent.postMessage({{
+                            type: 'streamlit:setSessionState',
+                            state: {{ authenticated: false }}
+                        }}, '*');
+                        window.location.reload();
+                    }});
+                </script>
+                """,
+                unsafe_allow_html=True
+            )
         
-        # Enhance transfer data with branch names
-        for t in recent_transfers:
-            from_branch = st.session_state.branches.get(t['from_branch_id'], {}).get('name', 'Unknown')
-            to_branch = st.session_state.branches.get(t['to_branch_id'], {}).get('name', 'Unknown')
-            t['from_branch'] = from_branch
-            t['to_branch'] = to_branch
+        # Navigation tabs
+        tabs = ["Upload", "Products", "Categories", "Inventory", "Reports", "Sales", "Branches", "Settings"]
+        cols = st.columns(len(tabs))
         
-        transfers_df = pd.DataFrame(recent_transfers)
-        st.dataframe(transfers_df)
+        for i, tab in enumerate(tabs):
+            if cols[i].button(tab, key=f"tab_{tab}", use_container_width=True):
+                st.session_state.active_tab = tab
+        
+        st.markdown("---")
+        
+        # Branch selector (show in all tabs except Branches and Settings)
+        if st.session_state.active_tab not in ["Branches", "Settings"] and len(st.session_state.branches) > 0:
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                branch_options = {bid: f"{data['name']}" for bid, data in st.session_state.branches.items()}
+                selected_branch = st.selectbox("Select Branch", list(branch_options.values()), key="branch_selector")
+                selected_branch_id = list(branch_options.keys())[list(branch_options.values()).index(selected_branch)]
+                st.session_state.current_branch = selected_branch_id
+            with col2:
+                st.markdown(f"<div style='padding-top: 2rem;'>Current Branch: <b>{branch_options[selected_branch_id]}</b></div>", unsafe_allow_html=True)
+            
+            st.markdown("---")
+        
+        # Handle different tabs
+        if st.session_state.active_tab == "Upload":
+            upload_tab()
+        elif st.session_state.active_tab == "Products":
+            products_tab()
+        elif st.session_state.active_tab == "Settings":
+            settings_tab()
+        # Add other tab functions here when needed
 
-# Add a footer
-st.markdown("---")
-st.markdown("RFID Inventory Management System © 2025")
+# Run the application
+if __name__ == "__main__":
+    main()
