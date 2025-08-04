@@ -221,6 +221,11 @@ def verify_password(password, hashed_password):
 def authenticate_user(username, password):
     if username in st.session_state.users:
         user = st.session_state.users[username]
+        
+        # Ensure admin user always has all permissions
+        if username == "admin" and user.get('role') == "admin" and 'permissions' not in user:
+            user['permissions'] = ["view", "add", "edit", "delete", "manage_users"]
+            
         if user.get('active', True) and verify_password(password, user['password']):
             return True, user
     return False, None
@@ -305,11 +310,16 @@ def show_login_page():
                     if username and password:
                         success, user = authenticate_user(username, password)
                         if success:
+                            # For admin user, always set all permissions
+                            if username == "admin" and user.get('role') == "admin":
+                                permissions = ["view", "add", "edit", "delete", "manage_users"]
+                            else:
+                                permissions = user.get('permissions', [])
+                                
                             st.session_state.authenticated = True
                             st.session_state.current_user = username
-                            st.session_state.user_role = user['role']
-                            # Ensure 'permissions' key exists, default to empty list if not
-                            st.session_state.user_permissions = user.get('permissions', [])
+                            st.session_state.user_role = user.get('role', 'user')
+                            st.session_state.user_permissions = permissions
                             st.success("Login successful!")
                             st.rerun()
                         else:
