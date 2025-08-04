@@ -1,17 +1,82 @@
-# Import warnings and filter the numpy compatibility warning
-import warnings
-warnings.filterwarnings("ignore", message="numpy.dtype size changed")
-
-import streamlit as st
-import pandas as pd
-import json
+# Try to fix numpy compatibility issue by forcing a specific import order
 import os
-from datetime import datetime
-import plotly.express as px
-from PIL import Image
+import json
 import io
 import base64
 import hashlib
+import warnings
+from datetime import datetime
+
+# Filter warnings
+warnings.filterwarnings("ignore")
+
+# First import numpy and ensure it's loaded before pandas
+try:
+    import numpy
+except ImportError:
+    pass
+
+# Import streamlit first as it's the main dependency
+import streamlit as st
+
+# Try to safely import other dependencies
+try:
+    import pandas as pd
+except Exception as e:
+    st.error("Error importing pandas. Using simplified functionality.")
+    
+    # Create a minimal pandas-like implementation for basic functionality
+    class MinimalDF:
+        def __init__(self, data=None):
+            self.data = data or []
+            self.columns = []
+        
+        def iterrows(self):
+            for i, row in enumerate(self.data):
+                yield i, row
+    
+    class MinimalPandas:
+        def DataFrame(self, data=None):
+            return MinimalDF(data)
+        
+        def read_excel(self, file):
+            st.error("Excel functionality not available due to pandas import error")
+            return MinimalDF()
+        
+        def isna(self, val):
+            return val is None
+    
+    pd = MinimalPandas()
+
+try:
+    import plotly.express as px
+except Exception:
+    # Create a minimal plotting replacement
+    class MinimalPlotly:
+        def pie(self, **kwargs):
+            st.warning("Charts not available due to plotly import error")
+            return None
+        
+        def bar(self, **kwargs):
+            st.warning("Charts not available due to plotly import error")
+            return None
+    
+    px = MinimalPlotly()
+
+try:
+    from PIL import Image
+except Exception:
+    # Create a minimal Image replacement
+    class MinimalImage:
+        @staticmethod
+        def open(file):
+            return None
+        
+        @staticmethod
+        def save(path):
+            pass
+    
+    Image = MinimalImage
 
 # Set page configuration
 st.set_page_config(
@@ -330,11 +395,36 @@ def process_sales_excel(df):
     results = []
     for _, row in df.iterrows():
         try:
+            # Ensure RFID is converted to string and stripped of whitespace
+            if 'rfid' not in row or pd.isna(row['rfid']):
+                results.append({
+                    'rfid': "Missing",
+                    'product_name': "Unknown",
+                    'status': 'error',
+                    'message': "Missing RFID tag in row"
+                })
+                continue
+                
             rfid = str(row['rfid']).strip()
-            # Check if sale_price column exists
-            sale_price = float(row['sale_price']) if 'sale_price' in df.columns else None
-            # Check if sale_date column exists
-            sale_date = row['sale_date'].strftime("%Y-%m-%d %H:%M:%S") if 'sale_date' in df.columns else None
+            
+            # Check if sale_price column exists and is valid
+            sale_price = None
+            if 'sale_price' in df.columns and not pd.isna(row['sale_price']):
+                try:
+                    sale_price = float(row['sale_price'])
+                except (ValueError, TypeError):
+                    sale_price = None
+            
+            # Check if sale_date column exists and is valid
+            sale_date = None
+            if 'sale_date' in df.columns and not pd.isna(row['sale_date']):
+                try:
+                    if isinstance(row['sale_date'], str):
+                        sale_date = datetime.strptime(row['sale_date'], "%Y-%m-%d %H:%M:%S").strftime("%Y-%m-%d %H:%M:%S")
+                    else:
+                        sale_date = row['sale_date'].strftime("%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    sale_date = None
             
             if rfid in st.session_state.rfid_data:
                 product_id = st.session_state.rfid_data[rfid]['product_id']
@@ -413,10 +503,17 @@ def add_product(product_id, name, description, category, image=None):
     
     image_path = None
     if image is not None:
-        # Save the image
-        image_filename = f"/images/productimage.jpg"
-        image.save(image_filename)
-        image_path = image_filename
+        try:
+            # Create a unique filename with timestamp and product_id
+            timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+            image_filename = f"data/images/{product_id}_{timestamp}.jpg"
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(image_filename), exist_ok=True)
+            # Save the image
+            image.save(image_filename)
+            image_path = image_filename
+        except Exception as e:
+            return False, f"Failed to save image: {str(e)}"
     
     st.session_state.products[product_id] = {
         'name': name,
@@ -538,10 +635,10 @@ def settings_tab():
         
         # Add new user
         with st.expander("Add New User", expanded=False):
-            new_username = st.text_input("Username")
-            new_user_password = st.text_input("User Password", type="password")
-            new_user_name = st.text_input("Full Name")
-            new_user_role = st.selectbox("Role", ["user", "admin"])
+            new_username = st.text_input("Username", key="new_username")
+            new_user_password = st.text_input("User Password", type="password", key="new_user_password")
+            new_user_name = st.text_input("Full Name", key="new_user_name")
+            new_user_role = st.selectbox("Role", ["user", "admin"], key="new_user_role")
             
             if st.button("Add User"):
                 if len(new_username) > 0 and len(new_user_password) >= 6 and len(new_user_name) > 0:
@@ -672,7 +769,7 @@ def upload_tab():
                             else:
                                 # Create a multiselect for choosing specific tags
                                 # Add a checkbox to select all options by default
-                                select_all = st.checkbox("Select all tags", value=True)
+                                select_all = st.checkbox("Select all tags", value=True, key="select_all_tags")
                                 
                                 if select_all:
                                     default_selections = new_rfids
@@ -682,7 +779,8 @@ def upload_tab():
                                 selected_rfids = st.multiselect(
                                     "Select specific tags to assign",
                                     options=new_rfids,
-                                    default=default_selections
+                                    default=default_selections,
+                                    key="selected_rfids"
                                 )
                                 
                                 if st.button("Assign Selected Tags to Product"):
@@ -841,7 +939,10 @@ def main():
         
         for i, tab in enumerate(tabs):
             if cols[i].button(tab, key=f"tab_{tab}", use_container_width=True):
-                st.session_state.active_tab = tab
+                # Ensure we're not causing a rerun loop by checking if we're already on this tab
+                if tab != st.session_state.active_tab:
+                    st.session_state.active_tab = tab
+                    st.experimental_rerun()
         
         st.markdown("---")
         
