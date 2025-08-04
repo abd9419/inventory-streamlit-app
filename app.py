@@ -328,6 +328,11 @@ def show_login_page():
 
 # Main application
 def show_main_app():
+    # Debug permission info
+    st.sidebar.write("Debug Info:")
+    st.sidebar.write(f"User Permissions: {st.session_state.user_permissions}")
+    st.sidebar.write(f"Has 'view' permission: {has_permission('view')}")
+    
     # Custom CSS
     st.markdown("""
     <style>
@@ -400,10 +405,15 @@ def show_main_app():
 
     # Navigation tabs (filtered by permissions)
     tabs = []
-    if has_permission("view"):
-        tabs.extend(["Upload", "Products", "Categories", "Inventory", "Reports", "Sales", "Branches"])
-    if has_permission("manage_users"):
-        tabs.append("User Management")
+    
+    # For admin user, always grant all permissions regardless of the permissions list
+    if st.session_state.user_role == "admin":
+        tabs.extend(["Upload", "Products", "Categories", "Inventory", "Reports", "Sales", "Branches", "User Management"])
+    else:
+        if has_permission("view"):
+            tabs.extend(["Upload", "Products", "Categories", "Inventory", "Reports", "Sales", "Branches"])
+        if has_permission("manage_users"):
+            tabs.append("User Management")
     
     if not tabs:
         st.error("You don't have permission to access any features.")
