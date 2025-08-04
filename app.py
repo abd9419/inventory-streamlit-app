@@ -308,7 +308,8 @@ def show_login_page():
                             st.session_state.authenticated = True
                             st.session_state.current_user = username
                             st.session_state.user_role = user['role']
-                            st.session_state.user_permissions = user['permissions']
+                            # Ensure 'permissions' key exists, default to empty list if not
+                            st.session_state.user_permissions = user.get('permissions', [])
                             st.success("Login successful!")
                             st.rerun()
                         else:
