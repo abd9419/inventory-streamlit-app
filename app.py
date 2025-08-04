@@ -1,4 +1,11 @@
-import streamlit as st
+# قبل تشغيل هذا التطبيق، تأكد من تثبيت streamlit:
+# pip install streamlit
+
+try:
+    import streamlit as st
+except ModuleNotFoundError:
+    raise ModuleNotFoundError("لم يتم العثور على مكتبة streamlit. يرجى تثبيتها أولاً باستخدام: pip install streamlit")
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
