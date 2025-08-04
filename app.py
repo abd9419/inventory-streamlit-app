@@ -585,7 +585,7 @@ def login_page():
                         st.session_state.user_role = st.session_state.users[username]["role"]
                         st.session_state.user_name = st.session_state.users[username]["name"]
                         st.success("Login successful!")
-                        st.experimental_rerun()
+                        st.rerun()
                     else:
                         st.error("Incorrect password")
                 else:
@@ -674,7 +674,7 @@ def settings_tab():
                         del st.session_state.users[user_to_delete]
                         save_data()
                         st.success(f"User {user_to_delete} deleted successfully")
-                        st.experimental_rerun()
+                        st.rerun()
                     else:
                         st.error("You cannot delete your own account")
 # Upload RFID Tags Tab
@@ -765,7 +765,7 @@ def upload_tab():
                                     
                                     st.success(f"Successfully assigned {assigned_count} new RFID tags to {product_options[selected_product_id]}")
                                     # Trigger a rerun to update the UI
-                                    st.experimental_rerun()
+                                    st.rerun()
                             else:
                                 # Create a multiselect for choosing specific tags
                                 # Add a checkbox to select all options by default
@@ -792,7 +792,7 @@ def upload_tab():
                                     
                                     st.success(f"Successfully assigned {assigned_count} selected RFID tags to {product_options[selected_product_id]}")
                                     # Trigger a rerun to update the UI
-                                    st.experimental_rerun()
+                                    st.rerun()
                 
                 if error_count > 0:
                     with st.expander("Errors", expanded=True):
@@ -942,7 +942,7 @@ def main():
                 # Ensure we're not causing a rerun loop by checking if we're already on this tab
                 if tab != st.session_state.active_tab:
                     st.session_state.active_tab = tab
-                    st.experimental_rerun()
+                    st.rerun()
         
         st.markdown("---")
         
