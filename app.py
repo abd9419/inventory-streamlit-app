@@ -1,2050 +1,2002 @@
+# Import warnings and filter the numpy compatibility warning
+import warnings
+warnings.filterwarnings("ignore", message="numpy.dtype size changed")
+warnings.filterwarnings("ignore")
+
+# Import required libraries
 import streamlit as st
 import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import sqlite3
-import seaborn as sns
-from PIL import Image
+import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
+import plotly.express as px
+from PIL import Image
 import io
 import base64
-import uuid
 import hashlib
-import random
-import plotly.express as px
-import plotly.graph_objects as go
-import warnings
-
-# Filter warnings
-warnings.filterwarnings("ignore")
+import uuid
 
 # Set page configuration
 st.set_page_config(
-    page_title="نظام إدارة المخازن والمستودعات",
+    page_title="RFID Inventory Management System",
     page_icon="📦",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
-# Create a connection to the database
-conn = sqlite3.connect('inventory.db', check_same_thread=False)
-c = conn.cursor()
+# Initialize session state for storing data
+if 'rfid_data' not in st.session_state:
+    st.session_state.rfid_data = {}
+if 'products' not in st.session_state:
+    st.session_state.products = {}
+if 'categories' not in st.session_state:
+    st.session_state.categories = []
+if 'transactions' not in st.session_state:
+    st.session_state.transactions = []
+if 'sales' not in st.session_state:
+    st.session_state.sales = []
+if 'branches' not in st.session_state:
+    # Default main branch
+    st.session_state.branches = {
+        "main": {"name": "Main Branch", "address": "Main Location", "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+    }
+if 'current_branch' not in st.session_state:
+    st.session_state.current_branch = "main"
+if 'transfers' not in st.session_state:
+    st.session_state.transfers = []
+if 'active_tab' not in st.session_state:
+    st.session_state.active_tab = "Upload"
 
-# Create tables if they don't exist
-c.execute('''
-    CREATE TABLE IF NOT EXISTS branches (
-        id INTEGER PRIMARY KEY,
-        name TEXT NOT NULL,
-        address TEXT,
-        description TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-''')
+# User management initialization
+if 'users' not in st.session_state:
+    # Default admin user (password: admin123)
+    st.session_state.users = {
+        "admin": {
+            "password": hashlib.sha256("admin123".encode()).hexdigest(),
+            "role": "admin",
+            "permissions": ["view", "add", "edit", "delete", "manage_users"],
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "active": True,
+            "name": "Administrator"
+        }
+    }
 
-c.execute('''
-    CREATE TABLE IF NOT EXISTS categories (
-        id INTEGER PRIMARY KEY,
-        name TEXT NOT NULL,
-        description TEXT
-    )
-''')
+# Authentication state
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+if 'current_user' not in st.session_state:
+    st.session_state.current_user = None
+if 'user_role' not in st.session_state:
+    st.session_state.user_role = None
+if 'user_permissions' not in st.session_state:
+    st.session_state.user_permissions = []
+if 'user_name' not in st.session_state:
+    st.session_state.user_name = None
 
-c.execute('''
-    CREATE TABLE IF NOT EXISTS products (
-        id INTEGER PRIMARY KEY,
-        name TEXT NOT NULL,
-        description TEXT,
-        category_id INTEGER,
-        price REAL,
-        barcode TEXT,
-        image BLOB,
-        FOREIGN KEY (category_id) REFERENCES categories (id)
-    )
-''')
+# Create data directory if it doesn't exist
+os.makedirs('data', exist_ok=True)
+os.makedirs('data/images', exist_ok=True)
 
-c.execute('''
-    CREATE TABLE IF NOT EXISTS inventory (
-        id INTEGER PRIMARY KEY,
-        product_id INTEGER,
-        branch_id INTEGER,
-        quantity INTEGER,
-        rfid_tag TEXT,
-        last_updated TIMESTAMP,
-        FOREIGN KEY (product_id) REFERENCES products (id),
-        FOREIGN KEY (branch_id) REFERENCES branches (id)
-    )
-''')
+# File paths
+RFID_DATA_PATH = 'data/rfid_data.json'
+PRODUCTS_PATH = 'data/products.json'
+CATEGORIES_PATH = 'data/categories.json'
+TRANSACTIONS_PATH = 'data/transactions.json'
+SALES_PATH = 'data/sales.json'
+BRANCHES_PATH = 'data/branches.json'
+TRANSFERS_PATH = 'data/transfers.json'
+USERS_PATH = 'data/users.json'
+# Load data from files if they exist
+def load_data():
+    try:
+        if os.path.exists(RFID_DATA_PATH):
+            with open(RFID_DATA_PATH, 'r', encoding='utf-8') as f:
+                st.session_state.rfid_data = json.load(f)
+        
+        if os.path.exists(PRODUCTS_PATH):
+            with open(PRODUCTS_PATH, 'r', encoding='utf-8') as f:
+                st.session_state.products = json.load(f)
+        
+        if os.path.exists(CATEGORIES_PATH):
+            with open(CATEGORIES_PATH, 'r', encoding='utf-8') as f:
+                st.session_state.categories = json.load(f)
+        
+        if os.path.exists(TRANSACTIONS_PATH):
+            with open(TRANSACTIONS_PATH, 'r', encoding='utf-8') as f:
+                st.session_state.transactions = json.load(f)
+        
+        if os.path.exists(SALES_PATH):
+            with open(SALES_PATH, 'r', encoding='utf-8') as f:
+                st.session_state.sales = json.load(f)
+                
+        if os.path.exists(BRANCHES_PATH):
+            with open(BRANCHES_PATH, 'r', encoding='utf-8') as f:
+                st.session_state.branches = json.load(f)
+                
+        if os.path.exists(TRANSFERS_PATH):
+            with open(TRANSFERS_PATH, 'r', encoding='utf-8') as f:
+                st.session_state.transfers = json.load(f)
+                
+        if os.path.exists(USERS_PATH):
+            with open(USERS_PATH, 'r', encoding='utf-8') as f:
+                st.session_state.users = json.load(f)
+    except Exception as e:
+        st.error(f"Error loading data: {str(e)}")
 
-c.execute('''
-    CREATE TABLE IF NOT EXISTS sales (
-        id INTEGER PRIMARY KEY,
-        product_id INTEGER,
-        branch_id INTEGER,
-        quantity INTEGER,
-        sale_date TIMESTAMP,
-        amount REAL,
-        reference TEXT,
-        FOREIGN KEY (product_id) REFERENCES products (id),
-        FOREIGN KEY (branch_id) REFERENCES branches (id)
-    )
-''')
-
-c.execute('''
-    CREATE TABLE IF NOT EXISTS transfers (
-        id INTEGER PRIMARY KEY,
-        product_id INTEGER,
-        from_branch_id INTEGER,
-        to_branch_id INTEGER,
-        quantity INTEGER,
-        transfer_date TIMESTAMP,
-        status TEXT,
-        reference TEXT,
-        FOREIGN KEY (product_id) REFERENCES products (id),
-        FOREIGN KEY (from_branch_id) REFERENCES branches (id),
-        FOREIGN KEY (to_branch_id) REFERENCES branches (id)
-    )
-''')
-
-c.execute('''
-    CREATE TABLE IF NOT EXISTS rfid_tags (
-        id INTEGER PRIMARY KEY,
-        tag_id TEXT NOT NULL UNIQUE,
-        product_id INTEGER,
-        assigned_at TIMESTAMP,
-        status TEXT,
-        FOREIGN KEY (product_id) REFERENCES products (id)
-    )
-''')
-
-c.execute('''
-    CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY,
-        username TEXT NOT NULL UNIQUE,
-        password TEXT NOT NULL,
-        role TEXT NOT NULL,
-        permissions TEXT,
-        active INTEGER DEFAULT 1,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-''')
-
-# Insert admin user if not exists
-c.execute('SELECT COUNT(*) FROM users WHERE username = "admin"')
-if c.fetchone()[0] == 0:
-    admin_password = hashlib.sha256("admin123".encode()).hexdigest()
-    c.execute('''
-        INSERT INTO users (username, password, role, permissions, active)
-        VALUES (?, ?, ?, ?, ?)
-    ''', ('admin', admin_password, 'admin', 'view,add,edit,delete,manage_users', 1))
-
-# Check if there's a main branch, create it if not
-c.execute('SELECT COUNT(*) FROM branches')
-if c.fetchone()[0] == 0:
-    c.execute('''
-        INSERT INTO branches (name, address, description)
-        VALUES (?, ?, ?)
-    ''', ('المستودع الرئيسي', 'العنوان الرئيسي', 'المستودع الرئيسي للمخزون'))
-
-conn.commit()
-
-# Helper functions
-def get_branch_name(branch_id):
-    c.execute('SELECT name FROM branches WHERE id = ?', (branch_id,))
-    result = c.fetchone()
-    return result[0] if result else "غير معروف"
-
-def get_product_name(product_id):
-    c.execute('SELECT name FROM products WHERE id = ?', (product_id,))
-    result = c.fetchone()
-    return result[0] if result else "غير معروف"
-
-def get_category_name(category_id):
-    c.execute('SELECT name FROM categories WHERE id = ?', (category_id,))
-    result = c.fetchone()
-    return result[0] if result else "غير معروف"
-
-def convert_df_to_csv_download_link(df, filename="data.csv"):
-    csv = df.to_csv(index=False)
-    b64 = base64.b64encode(csv.encode()).decode()
-    href = f'<a href="data:file/csv;base64,{b64}" download="{filename}">تحميل البيانات كملف CSV</a>'
-    return href
-
-def generate_reference_number(prefix="REF"):
-    """Generate a unique reference number with a timestamp"""
-    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    random_suffix = str(uuid.uuid4())[:8]
-    return f"{prefix}-{timestamp}-{random_suffix}"
+# Save data to files
+def save_data():
+    try:
+        with open(RFID_DATA_PATH, 'w', encoding='utf-8') as f:
+            json.dump(st.session_state.rfid_data, f, ensure_ascii=False, indent=2)
+        
+        with open(PRODUCTS_PATH, 'w', encoding='utf-8') as f:
+            json.dump(st.session_state.products, f, ensure_ascii=False, indent=2)
+        
+        with open(CATEGORIES_PATH, 'w', encoding='utf-8') as f:
+            json.dump(st.session_state.categories, f, ensure_ascii=False, indent=2)
+        
+        with open(TRANSACTIONS_PATH, 'w', encoding='utf-8') as f:
+            json.dump(st.session_state.transactions, f, ensure_ascii=False, indent=2)
+            
+        with open(SALES_PATH, 'w', encoding='utf-8') as f:
+            json.dump(st.session_state.sales, f, ensure_ascii=False, indent=2)
+            
+        with open(BRANCHES_PATH, 'w', encoding='utf-8') as f:
+            json.dump(st.session_state.branches, f, ensure_ascii=False, indent=2)
+            
+        with open(TRANSFERS_PATH, 'w', encoding='utf-8') as f:
+            json.dump(st.session_state.transfers, f, ensure_ascii=False, indent=2)
+            
+        with open(USERS_PATH, 'w', encoding='utf-8') as f:
+            json.dump(st.session_state.users, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        st.error(f"Error saving data: {str(e)}")
 
 # Authentication functions
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-def verify_password(username, password):
-    hashed_password = hash_password(password)
-    c.execute('SELECT password FROM users WHERE username = ?', (username,))
-    result = c.fetchone()
-    if result:
-        return result[0] == hashed_password
-    return False
+def verify_password(password, hashed_password):
+    return hash_password(password) == hashed_password
 
-def get_user_permissions(username):
-    c.execute('SELECT permissions FROM users WHERE username = ? AND active = 1', (username,))
-    result = c.fetchone()
-    if result and result[0]:
-        return result[0].split(',')
-    return []
+def authenticate_user(username, password):
+    if username in st.session_state.users:
+        user = st.session_state.users[username]
+        
+        # Ensure admin user always has all permissions
+        if username == "admin" and user.get('role') == "admin" and 'permissions' not in user:
+            user['permissions'] = ["view", "add", "edit", "delete", "manage_users"]
+            
+        if user.get('active', True) and verify_password(password, user['password']):
+            return True, user
+    return False, None
 
-def get_user_role(username):
-    c.execute('SELECT role FROM users WHERE username = ?', (username,))
-    result = c.fetchone()
-    return result[0] if result else None
+def has_permission(permission):
+    # Admin always has all permissions
+    if st.session_state.user_role == "admin":
+        return True
+    return permission in st.session_state.user_permissions
 
-# Generate random RFID tag
-def generate_rfid_tag():
-    """Generate a random RFID tag"""
-    return f"RFID-{uuid.uuid4().hex[:12].upper()}"
+def require_permission(permission):
+    if not has_permission(permission):
+        st.error(f"Access denied. Required permission: {permission}")
+        return False
+    return True
+# User management functions
+def add_user(username, password, role, permissions=None, name=None):
+    if username in st.session_state.users:
+        return False, f"User {username} already exists"
+    
+    if permissions is None:
+        permissions = []
+    
+    if name is None:
+        name = username.capitalize()
+    
+    st.session_state.users[username] = {
+        "password": hash_password(password),
+        "role": role,
+        "permissions": permissions,
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "active": True,
+        "created_by": st.session_state.current_user,
+        "name": name
+    }
+    save_data()
+    return True, f"User {username} created successfully"
 
-# Initialize session state
-if 'authenticated' not in st.session_state:
-    st.session_state.authenticated = False
-if 'username' not in st.session_state:
-    st.session_state.username = None
-if 'permissions' not in st.session_state:
-    st.session_state.permissions = []
-if 'role' not in st.session_state:
-    st.session_state.role = None
-if 'current_branch' not in st.session_state:
-    st.session_state.current_branch = 1
+def update_user(username, password=None, role=None, permissions=None, active=None, name=None):
+    if username not in st.session_state.users:
+        return False, f"User {username} not found"
+    
+    user = st.session_state.users[username]
+    if password:
+        user['password'] = hash_password(password)
+    if role:
+        user['role'] = role
+    if permissions is not None:
+        user['permissions'] = permissions
+    if active is not None:
+        user['active'] = active
+    if name:
+        user['name'] = name
+    
+    user['modified_at'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    user['modified_by'] = st.session_state.current_user
+    
+    save_data()
+    return True, f"User {username} updated successfully"
 
-# CSS styles for Arabic RTL support
-st.markdown("""
-<style>
-    body {
-        direction: rtl;
+def delete_user(username):
+    if username not in st.session_state.users:
+        return False, f"User {username} not found"
+    
+    if username == "admin":
+        return False, "Cannot delete admin user"
+    
+    del st.session_state.users[username]
+    save_data()
+    return True, f"User {username} deleted successfully"
+
+# RFID and Product Management Functions
+def add_rfid_tag(rfid, product_id, category, branch_id=None, timestamp=None):
+    if timestamp is None:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Default to current branch if not specified
+    if branch_id is None:
+        branch_id = st.session_state.current_branch
+    
+    if rfid in st.session_state.rfid_data:
+        return False, f"RFID tag {rfid} already exists for product {st.session_state.rfid_data[rfid]['product_id']}"
+    
+    st.session_state.rfid_data[rfid] = {
+        'product_id': product_id,
+        'category': category,
+        'branch_id': branch_id,
+        'added_at': timestamp
     }
-    .stButton > button {
-        float: right;
+    
+    # Add to transactions
+    st.session_state.transactions.append({
+        'rfid': rfid,
+        'product_id': product_id,
+        'branch_id': branch_id,
+        'action': 'added',
+        'timestamp': timestamp
+    })
+    
+    save_data()
+    return True, f"RFID tag {rfid} added successfully"
+def process_excel(df):
+    results = []
+    for _, row in df.iterrows():
+        try:
+            rfid = str(row['rfid']).strip()
+            if rfid in st.session_state.rfid_data:
+                product_id = st.session_state.rfid_data[rfid]['product_id']
+                product_name = st.session_state.products[product_id]['name'] if product_id in st.session_state.products else "Unknown"
+                results.append({
+                    'rfid': rfid,
+                    'status': 'existing',
+                    'message': f"Tag already exists for product {product_name} (ID: {product_id})"
+                })
+            else:
+                results.append({
+                    'rfid': rfid,
+                    'status': 'new',
+                    'message': "New RFID tag"
+                })
+        except Exception as e:
+            results.append({
+                'rfid': rfid if 'rfid' in locals() else "Error",
+                'status': 'error',
+                'message': str(e)
+            })
+    
+    return results
+
+# Product Functions
+def add_product(product_id, name, description, category, image=None):
+    if product_id in st.session_state.products:
+        return False, f"Product ID {product_id} already exists"
+    
+    image_path = None
+    if image is not None:
+        try:
+            # Create a unique filename with timestamp and product_id
+            timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+            image_filename = f"data/images/{product_id}_{timestamp}.jpg"
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(image_filename), exist_ok=True)
+            # Save the image
+            image.save(image_filename)
+            image_path = image_filename
+        except Exception as e:
+            return False, f"Failed to save image: {str(e)}"
+    
+    st.session_state.products[product_id] = {
+        'name': name,
+        'description': description,
+        'category': category,
+        'image': image_path
     }
-    .stTextInput > div > div > input {
-        text-align: right;
+    
+    save_data()
+    return True, f"Product {name} added successfully"
+
+def delete_product(product_id):
+    if product_id not in st.session_state.products:
+        return False, f"Product ID {product_id} not found"
+    
+    # Check if there are RFID tags associated with this product
+    associated_rfids = [rfid for rfid, data in st.session_state.rfid_data.items() if data['product_id'] == product_id]
+    if associated_rfids:
+        return False, f"Cannot delete product with {len(associated_rfids)} associated RFID tags. Remove the tags first."
+    
+    # Get the image path to delete the file
+    image_path = st.session_state.products[product_id].get('image')
+    if image_path and os.path.exists(image_path):
+        try:
+            os.remove(image_path)
+        except Exception as e:
+            # Log the error but continue with deletion
+            st.warning(f"Error deleting product image: {str(e)}")
+    
+    del st.session_state.products[product_id]
+    save_data()
+    return True, f"Product {product_id} deleted successfully"
+
+def update_product(product_id, name=None, description=None, category=None, image=None):
+    if product_id not in st.session_state.products:
+        return False, f"Product ID {product_id} not found"
+    
+    product = st.session_state.products[product_id]
+    
+    if name is not None:
+        product['name'] = name
+    
+    if description is not None:
+        product['description'] = description
+    
+    if category is not None:
+        product['category'] = category
+    
+    if image is not None:
+        try:
+            # Delete the old image if it exists
+            old_image_path = product.get('image')
+            if old_image_path and os.path.exists(old_image_path):
+                os.remove(old_image_path)
+            
+            # Save the new image
+            timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+            image_filename = f"data/images/{product_id}_{timestamp}.jpg"
+            image.save(image_filename)
+            product['image'] = image_filename
+        except Exception as e:
+            return False, f"Failed to update image: {str(e)}"
+    
+    save_data()
+    return True, f"Product {product_id} updated successfully"
+# Category Functions
+def add_category(category_name):
+    if category_name in st.session_state.categories:
+        return False, f"Category {category_name} already exists"
+    
+    st.session_state.categories.append(category_name)
+    save_data()
+    return True, f"Category {category_name} added successfully"
+
+def delete_category(category_name):
+    if category_name not in st.session_state.categories:
+        return False, f"Category {category_name} not found"
+    
+    # Check if there are products in this category
+    products_in_category = [pid for pid, data in st.session_state.products.items() if data['category'] == category_name]
+    if products_in_category:
+        return False, f"Cannot delete category with {len(products_in_category)} associated products. Change their category first."
+    
+    st.session_state.categories.remove(category_name)
+    save_data()
+    return True, f"Category {category_name} deleted successfully"
+
+# Branch Functions
+def add_branch(branch_id, name, address):
+    if branch_id in st.session_state.branches:
+        return False, f"Branch ID {branch_id} already exists"
+    
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    st.session_state.branches[branch_id] = {
+        'name': name,
+        'address': address,
+        'created_at': timestamp
     }
-    .stSelectbox > div > div > div {
-        text-align: right;
+    
+    save_data()
+    return True, f"Branch {name} added successfully"
+
+def delete_branch(branch_id):
+    if branch_id not in st.session_state.branches:
+        return False, f"Branch ID {branch_id} not found"
+    
+    if branch_id == "main":
+        return False, "Cannot delete the main branch"
+    
+    # Check if there are RFID tags in this branch
+    rfids_in_branch = [rfid for rfid, data in st.session_state.rfid_data.items() if data['branch_id'] == branch_id]
+    if rfids_in_branch:
+        return False, f"Cannot delete branch with {len(rfids_in_branch)} items. Transfer them first."
+    
+    del st.session_state.branches[branch_id]
+    save_data()
+    return True, f"Branch {branch_id} deleted successfully"
+
+def update_branch(branch_id, name=None, address=None):
+    if branch_id not in st.session_state.branches:
+        return False, f"Branch ID {branch_id} not found"
+    
+    branch = st.session_state.branches[branch_id]
+    
+    if name is not None:
+        branch['name'] = name
+    
+    if address is not None:
+        branch['address'] = address
+    
+    save_data()
+    return True, f"Branch {branch_id} updated successfully"
+
+# Transfer Functions
+def transfer_product(rfid, to_branch_id, timestamp=None):
+    if timestamp is None:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    if rfid not in st.session_state.rfid_data:
+        return False, f"RFID tag {rfid} not found in inventory"
+    
+    if to_branch_id not in st.session_state.branches:
+        return False, f"Branch {to_branch_id} does not exist"
+    
+    from_branch_id = st.session_state.rfid_data[rfid]['branch_id']
+    
+    if from_branch_id == to_branch_id:
+        return False, f"Item is already in branch {to_branch_id}"
+    
+    product_id = st.session_state.rfid_data[rfid]['product_id']
+    product_name = st.session_state.products[product_id]['name'] if product_id in st.session_state.products else "Unknown"
+    
+    # Update the product's branch
+    st.session_state.rfid_data[rfid]['branch_id'] = to_branch_id
+    
+    # Record the transfer
+    transfer_record = {
+        'rfid': rfid,
+        'product_id': product_id,
+        'product_name': product_name,
+        'from_branch_id': from_branch_id,
+        'to_branch_id': to_branch_id,
+        'timestamp': timestamp
     }
-    div.stMarkdown {
-        text-align: right;
+    
+    st.session_state.transfers.append(transfer_record)
+    
+    # Add to transactions
+    st.session_state.transactions.append({
+        'rfid': rfid,
+        'product_id': product_id,
+        'from_branch_id': from_branch_id,
+        'to_branch_id': to_branch_id,
+        'action': 'transferred',
+        'timestamp': timestamp
+    })
+    
+    save_data()
+    return True, f"Product {product_name} with RFID {rfid} transferred from {st.session_state.branches[from_branch_id]['name']} to {st.session_state.branches[to_branch_id]['name']}"
+# Sales Functions
+def process_sale(rfid, sale_price=None, sale_date=None):
+    if sale_date is None:
+        sale_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    if rfid not in st.session_state.rfid_data:
+        return False, f"RFID tag {rfid} not found in inventory"
+    
+    product_id = st.session_state.rfid_data[rfid]['product_id']
+    product_name = st.session_state.products[product_id]['name'] if product_id in st.session_state.products else "Unknown"
+    category = st.session_state.rfid_data[rfid]['category']
+    branch_id = st.session_state.rfid_data[rfid]['branch_id']
+    
+    # Add to sales record
+    sale_record = {
+        'rfid': rfid,
+        'product_id': product_id,
+        'product_name': product_name,
+        'category': category,
+        'branch_id': branch_id,
+        'sale_date': sale_date,
+        'sale_price': sale_price
     }
-    .css-1kyxreq, .css-12w0qpk {
-        justify-content: right !important;
-    }
-    th, td {
-        text-align: right !important;
-    }
-    [data-testid="stSidebar"] {
-        direction: rtl;
-    }
-    h1, h2, h3, h4, h5, h6, label {
-        text-align: right;
-    }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 1px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        white-space: pre-wrap;
-        background-color: #F0F2F6;
-        border-radius: 4px 4px 0px 0px;
-        gap: 1px;
-        padding-top: 10px;
-        padding-bottom: 10px;
-        padding-left: 10px;
-        padding-right: 10px;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #E0E0E0;
-    }
-    .card {
-        padding: 16px;
-        border-radius: 8px;
-        margin-bottom: 16px;
-        background-color: #f8f9fa;
-        border: 1px solid #eee;
-    }
-    .warning-box {
-        background-color: #fff3cd;
-        padding: 10px;
-        border-radius: 4px;
-        border-left: 5px solid #ffcb3d;
-        margin-bottom: 16px;
-    }
-    .success-box {
-        background-color: #d4edda;
-        padding: 10px;
-        border-radius: 4px;
-        border-left: 5px solid #28a745;
-        margin-bottom: 16px;
-    }
-    .error-box {
-        background-color: #f8d7da;
-        padding: 10px;
-        border-radius: 4px;
-        border-left: 5px solid #dc3545;
-        margin-bottom: 16px;
-    }
-    .info-box {
-        background-color: #e2f0fb;
-        padding: 10px;
-        border-radius: 4px;
-        border-left: 5px solid #0dcaf0;
-        margin-bottom: 16px;
-    }
-    .highlight {
-        background-color: #fff5cc;
-        padding: 5px;
-        border-radius: 3px;
-    }
-</style>
-""", unsafe_allow_html=True)
+    
+    st.session_state.sales.append(sale_record)
+    
+    # Add to transactions
+    st.session_state.transactions.append({
+        'rfid': rfid,
+        'product_id': product_id,
+        'branch_id': branch_id,
+        'action': 'sold',
+        'timestamp': sale_date
+    })
+    
+    # Remove from inventory
+    del st.session_state.rfid_data[rfid]
+    
+    save_data()
+    return True, f"Product {product_name} with RFID {rfid} marked as sold from {st.session_state.branches[branch_id]['name']}"
+
+def process_sales_excel(df):
+    results = []
+    for _, row in df.iterrows():
+        try:
+            # Ensure RFID is converted to string and stripped of whitespace
+            if 'rfid' not in row or pd.isna(row['rfid']):
+                results.append({
+                    'rfid': "Missing",
+                    'product_name': "Unknown",
+                    'status': 'error',
+                    'message': "Missing RFID tag in row"
+                })
+                continue
+                
+            rfid = str(row['rfid']).strip()
+            
+            # Check if sale_price column exists and is valid
+            sale_price = None
+            if 'sale_price' in df.columns and not pd.isna(row['sale_price']):
+                try:
+                    sale_price = float(row['sale_price'])
+                except (ValueError, TypeError):
+                    sale_price = None
+            
+            # Check if sale_date column exists and is valid
+            sale_date = None
+            if 'sale_date' in df.columns and not pd.isna(row['sale_date']):
+                try:
+                    if isinstance(row['sale_date'], str):
+                        sale_date = datetime.strptime(row['sale_date'], "%Y-%m-%d %H:%M:%S").strftime("%Y-%m-%d %H:%M:%S")
+                    else:
+                        sale_date = row['sale_date'].strftime("%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    sale_date = None
+            
+            if rfid in st.session_state.rfid_data:
+                product_id = st.session_state.rfid_data[rfid]['product_id']
+                product_name = st.session_state.products[product_id]['name'] if product_id in st.session_state.products else "Unknown"
+                
+                success, message = process_sale(rfid, sale_price, sale_date)
+                
+                results.append({
+                    'rfid': rfid,
+                    'product_name': product_name,
+                    'status': 'sold' if success else 'error',
+                    'message': message
+                })
+            else:
+                results.append({
+                    'rfid': rfid,
+                    'product_name': "Unknown",
+                    'status': 'error',
+                    'message': "RFID tag not found in inventory"
+                })
+        except Exception as e:
+            results.append({
+                'rfid': rfid if 'rfid' in locals() else "Error",
+                'product_name': "Unknown",
+                'status': 'error',
+                'message': str(e)
+            })
+    
+    return results
+
+# Load data at startup
+load_data()
+
+# Custom CSS
+def load_css():
+    st.markdown("""
+    <style>
+        .main-header {
+            font-size: 2.5rem;
+            font-weight: bold;
+            color: #1E88E5;
+            text-align: center;
+            margin-bottom: 1rem;
+        }
+        .subheader {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #0D47A1;
+            margin-top: 1rem;
+            margin-bottom: 1rem;
+        }
+        .card {
+            padding: 1.5rem;
+            border-radius: 0.5rem;
+            background-color: #f8f9fa;
+            margin-bottom: 1rem;
+        }
+        .success-msg {
+            background-color: #d4edda;
+            color: #155724;
+            padding: 1rem;
+            border-radius: 0.25rem;
+            margin-bottom: 1rem;
+        }
+        .warning-msg {
+            background-color: #fff3cd;
+            color: #856404;
+            padding: 1rem;
+            border-radius: 0.25rem;
+            margin-bottom: 1rem;
+        }
+        .info-box {
+            background-color: #e3f2fd;
+            padding: 1rem;
+            border-radius: 0.25rem;
+            margin-bottom: 1rem;
+        }
+        .user-info {
+            background-color: #e8f5e8;
+            padding: 0.5rem;
+            border-radius: 0.25rem;
+            margin-bottom: 1rem;
+        }
+    </style>
+    """, unsafe_allow_html=True)
 
 # Login page
-def show_login():
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.title("نظام إدارة المخازن")
-        st.subheader("تسجيل الدخول")
-        
-        username = st.text_input("اسم المستخدم")
-        password = st.text_input("كلمة المرور", type="password")
-        
-        if st.button("تسجيل الدخول"):
-            if username and password:
-                if verify_password(username, password):
-                    st.session_state.authenticated = True
-                    st.session_state.username = username
-                    st.session_state.permissions = get_user_permissions(username)
-                    st.session_state.role = get_user_role(username)
-                    st.success("تم تسجيل الدخول بنجاح!")
-                    st.rerun()
-                else:
-                    st.error("اسم المستخدم أو كلمة المرور غير صحيحة")
-            else:
-                st.warning("الرجاء إدخال اسم المستخدم وكلمة المرور")
-        
-        st.info("اسم المستخدم الافتراضي: admin، كلمة المرور: admin123")
-
-# Main application
-def main_app():
-    # Sidebar for navigation
-    st.sidebar.title("القائمة الرئيسية")
-    menu_options = ["الرئيسية", "إدارة المنتجات", "إدارة الفئات", "عرض المخزون", "التقارير", "إدارة المبيعات", "رفع بيانات RFID", "إدارة الفروع"]
-    if st.session_state.role == 'admin':
-        menu_options.append("إدارة المستخدمين")
-        
-    menu = st.sidebar.radio("اختر الوظيفة:", menu_options)
+def show_login_page():
+    load_css()
     
-    # User info and logout in sidebar
-    st.sidebar.markdown("---")
-    st.sidebar.markdown(f"**المستخدم**: {st.session_state.username}")
-    st.sidebar.markdown(f"**الصلاحية**: {st.session_state.role}")
-    if st.sidebar.button("تسجيل الخروج"):
-        st.session_state.authenticated = False
-        st.session_state.username = None
-        st.session_state.permissions = []
-        st.session_state.role = None
-        st.rerun()
+    st.markdown("""
+    <div style="text-align: center; padding: 2rem;">
+        <h1>🔐 RFID Inventory Management System</h1>
+        <h3>Admin Login</h3>
+    </div>
+    """, unsafe_allow_html=True)
     
-    # Branch selection (except for branch management page)
-    if menu != "إدارة الفروع":
-        st.sidebar.markdown("---")
-        st.sidebar.subheader("اختيار الفرع")
+    with st.container():
+        col1, col2, col3 = st.columns([1, 2, 1])
         
-        # Get all branches
-        c.execute("SELECT id, name FROM branches")
-        branches = c.fetchall()
-        branch_dict = {b[0]: b[1] for b in branches}
-        
-        if branch_dict:
-            selected_branch = st.sidebar.selectbox(
-                "اختر الفرع",
-                options=list(branch_dict.keys()),
-                format_func=lambda x: branch_dict[x],
-                index=list(branch_dict.keys()).index(st.session_state.current_branch) if st.session_state.current_branch in branch_dict else 0
-            )
-            st.session_state.current_branch = selected_branch
-    
-    # Main Dashboard Page
-    if menu == "الرئيسية":
-        st.title("نظام إدارة المخازن والمستودعات")
-        st.write("مرحباً بك في نظام إدارة المخازن والمستودعات. الرجاء اختيار الوظيفة المطلوبة من القائمة الجانبية.")
-        
-        # Dashboard summary
-        col1, col2, col3 = st.columns(3)
-        
-        # Total products
-        c.execute("SELECT COUNT(*) FROM products")
-        total_products = c.fetchone()[0]
-        col1.metric("إجمالي المنتجات", total_products)
-        
-        # Total inventory for current branch
-        c.execute("SELECT SUM(quantity) FROM inventory WHERE branch_id = ?", (st.session_state.current_branch,))
-        total_inventory = c.fetchone()[0]
-        if total_inventory is None:
-            total_inventory = 0
-        col2.metric("إجمالي المخزون في الفرع", total_inventory)
-        
-        # Total sales for current branch
-        c.execute("SELECT SUM(amount) FROM sales WHERE branch_id = ?", (st.session_state.current_branch,))
-        total_sales = c.fetchone()[0]
-        if total_sales is None:
-            total_sales = 0
-        col3.metric("إجمالي المبيعات في الفرع", f"{total_sales:.2f} ريال")
-        
-        # Recent activities
-        st.subheader("أحدث الأنشطة")
-        
-        # Get recent inventory changes
-        c.execute('''
-            SELECT p.name, i.quantity, b.name, i.last_updated, 'inventory' as activity_type
-            FROM inventory i
-            JOIN products p ON i.product_id = p.id
-            JOIN branches b ON i.branch_id = b.id
-            WHERE i.last_updated IS NOT NULL
-            ORDER BY i.last_updated DESC
-            LIMIT 5
-        ''')
-        inventory_activities = c.fetchall()
-        
-        # Get recent sales
-        c.execute('''
-            SELECT p.name, s.quantity, b.name, s.sale_date, 'sale' as activity_type
-            FROM sales s
-            JOIN products p ON s.product_id = p.id
-            JOIN branches b ON s.branch_id = b.id
-            ORDER BY s.sale_date DESC
-            LIMIT 5
-        ''')
-        sales_activities = c.fetchall()
-        
-        # Combine and sort activities
-        all_activities = inventory_activities + sales_activities
-        if all_activities:
-            all_activities.sort(key=lambda x: x[3] if x[3] else "", reverse=True)
-            all_activities = all_activities[:5]
-        
-        if all_activities:
-            activity_data = []
-            for activity in all_activities:
-                product, quantity, branch, date, activity_type = activity
-                if activity_type == 'inventory':
-                    activity_str = f"تحديث مخزون {product} في {branch} ({quantity} قطعة)"
-                else:
-                    activity_str = f"بيع {product} من {branch} ({quantity} قطعة)"
-                activity_data.append({"النشاط": activity_str, "التاريخ": date})
-            
-            df_activities = pd.DataFrame(activity_data)
-            st.table(df_activities)
-        else:
-            st.info("لا توجد أنشطة حديثة")
-        
-        # Low stock alert
-        st.subheader("تنبيهات المخزون المنخفض")
-        c.execute('''
-            SELECT p.name, i.quantity, b.name
-            FROM inventory i
-            JOIN products p ON i.product_id = p.id
-            JOIN branches b ON i.branch_id = b.id
-            WHERE i.quantity < 10 AND i.branch_id = ?
-        ''', (st.session_state.current_branch,))
-        low_stock = c.fetchall()
-        
-        if low_stock:
-            st.markdown('<div class="warning-box">تنبيه: يوجد منتجات منخفضة المخزون!</div>', unsafe_allow_html=True)
-            low_stock_data = []
-            for product, quantity, branch in low_stock:
-                low_stock_data.append({"المنتج": product, "الكمية المتبقية": quantity, "الفرع": branch})
-            
-            df_low_stock = pd.DataFrame(low_stock_data)
-            st.table(df_low_stock)
-        else:
-            st.markdown('<div class="success-box">لا توجد منتجات منخفضة المخزون حالياً.</div>', unsafe_allow_html=True)
-    
-    # Category Management
-    elif menu == "إدارة الفئات":
-        st.title("إدارة الفئات")
-        
-        tab1, tab2, tab3 = st.tabs(["إضافة فئة", "تعديل فئة", "حذف فئة"])
-        
-        with tab1:
-            st.header("إضافة فئة جديدة")
-            
-            name = st.text_input("اسم الفئة")
-            description = st.text_area("وصف الفئة")
-            
-            if st.button("إضافة الفئة"):
-                if name:
-                    try:
-                        c.execute('''
-                            INSERT INTO categories (name, description)
-                            VALUES (?, ?)
-                        ''', (name, description))
-                        conn.commit()
-                        st.success(f"تم إضافة الفئة '{name}' بنجاح")
-                    except Exception as e:
-                        st.error(f"حدث خطأ أثناء إضافة الفئة: {e}")
-                else:
-                    st.warning("الرجاء إدخال اسم الفئة")
-        
-        with tab2:
-            st.header("تعديل فئة")
-            
-            # Get categories for dropdown
-            c.execute("SELECT id, name FROM categories")
-            categories = c.fetchall()
-            category_dict = {cat[0]: cat[1] for cat in categories}
-            
-            if category_dict:
-                category_id = st.selectbox("اختر الفئة للتعديل", options=list(category_dict.keys()), format_func=lambda x: category_dict[x])
+        with col2:
+            with st.form("login_form"):
+                username = st.text_input("Username")
+                password = st.text_input("Password", type="password")
                 
-                # Get current category data
-                c.execute("SELECT name, description FROM categories WHERE id = ?", (category_id,))
-                category_data = c.fetchone()
-                
-                if category_data:
-                    updated_name = st.text_input("اسم الفئة", value=category_data[0])
-                    updated_description = st.text_area("وصف الفئة", value=category_data[1] or "")
-                    
-                    if st.button("تحديث الفئة"):
-                        try:
-                            c.execute('''
-                                UPDATE categories
-                                SET name = ?, description = ?
-                                WHERE id = ?
-                            ''', (updated_name, updated_description, category_id))
-                            
-                            conn.commit()
-                            st.success(f"تم تحديث الفئة '{updated_name}' بنجاح")
-                        except Exception as e:
-                            st.error(f"حدث خطأ أثناء تحديث الفئة: {e}")
-            else:
-                st.info("لا توجد فئات لتعديلها")
-        
-        with tab3:
-            st.header("حذف فئة")
-            
-            if category_dict:
-                category_to_delete = st.selectbox("اختر الفئة للحذف", options=list(category_dict.keys()), format_func=lambda x: category_dict[x], key="delete_category_select")
-                
-                # Check if category has products
-                c.execute("SELECT COUNT(*) FROM products WHERE category_id = ?", (category_to_delete,))
-                product_count = c.fetchone()[0]
-                
-                if product_count > 0:
-                    st.warning(f"لا يمكن حذف الفئة لأنها تحتوي على {product_count} منتجات مرتبطة بها")
-                
-                # Confirmation checkbox
-                confirm_delete = st.checkbox("أنا متأكد من حذف هذه الفئة", key="confirm_delete_category")
-                
-                if st.button("حذف الفئة") and confirm_delete:
-                    if product_count == 0:  # Only delete if no products are linked
-                        try:
-                            c.execute("DELETE FROM categories WHERE id = ?", (category_to_delete,))
-                            conn.commit()
-                            st.success(f"تم حذف الفئة '{category_dict[category_to_delete]}' بنجاح")
+                if st.form_submit_button("Login", use_container_width=True):
+                    if username and password:
+                        success, user = authenticate_user(username, password)
+                        if success:
+                            # For admin user, always set all permissions
+                            if username == "admin" and user.get('role') == "admin":
+                                permissions = ["view", "add", "edit", "delete", "manage_users"]
+                            else:
+                                permissions = user.get('permissions', [])
+                                
+                            st.session_state.authenticated = True
+                            st.session_state.current_user = username
+                            st.session_state.user_role = user.get('role', 'user')
+                            st.session_state.user_permissions = permissions
+                            st.session_state.user_name = user.get('name', username.capitalize())
+                            st.success("Login successful!")
                             st.rerun()
-                        except Exception as e:
-                            st.error(f"حدث خطأ أثناء حذف الفئة: {e}")
+                        else:
+                            st.error("Invalid username or password")
                     else:
-                        st.error("لا يمكن حذف الفئة لأنها تحتوي على منتجات مرتبطة بها. قم بتغيير تصنيف المنتجات أولاً")
-            else:
-                st.info("لا توجد فئات لحذفها")
-    # Product Management
-    elif menu == "إدارة المنتجات":
-        st.title("إدارة المنتجات")
+                        st.error("Please enter both username and password")
+    
+    st.markdown("""
+    <div style="text-align: center; margin-top: 2rem; padding: 1rem; background-color: #f0f2f6; border-radius: 0.5rem;">
+        <h4>Default Admin Credentials:</h4>
+        <p><strong>Username:</strong> admin</p>
+        <p><strong>Password:</strong> admin123</p>
+        <p><em>Please change the default password after first login</em></p>
+    </div>
+    """, unsafe_allow_html=True)
+# Tab Functions
+def upload_tab():
+    if not require_permission("view"):
+        return
         
-        tab1, tab2, tab3, tab4 = st.tabs(["إضافة منتج", "تعديل منتج", "حذف منتج", "عرض المنتجات"])
-        
-        with tab1:
-            st.header("إضافة منتج جديد")
+    st.markdown('<div class="subheader">Upload RFID Tags</div>', unsafe_allow_html=True)
+    
+    with st.expander("Instructions", expanded=False):
+        st.info("""
+        1. Upload an Excel file containing RFID tags.
+        2. The Excel file must have a column named 'rfid'.
+        3. The system will check if the tags already exist and show their status.
+        4. For new tags, you can assign them to products.
+        """)
+    
+    uploaded_file = st.file_uploader("Upload Excel file with RFID tags", type=["xlsx", "xls"])
+    
+    if uploaded_file is not None:
+        try:
+            df = pd.read_excel(uploaded_file)
             
-            # Get categories for dropdown
-            c.execute("SELECT id, name FROM categories")
-            categories = c.fetchall()
-            category_dict = {cat[0]: cat[1] for cat in categories}
-            if not category_dict:
-                category_dict[0] = "لا توجد فئات"
+            if 'rfid' not in df.columns:
+                st.error("The Excel file must contain a column named 'rfid'")
             else:
-                category_dict[0] = "اختر الفئة"
+                # Process the uploaded file
+                results = process_excel(df)
+                
+                # Display results
+                st.markdown('<div class="subheader">Results</div>', unsafe_allow_html=True)
+                
+                # Count statuses
+                existing_count = sum(1 for r in results if r['status'] == 'existing')
+                new_count = sum(1 for r in results if r['status'] == 'new')
+                error_count = sum(1 for r in results if r['status'] == 'error')
+                
+                # Display summary
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Existing Tags", existing_count)
+                col2.metric("New Tags", new_count)
+                col3.metric("Errors", error_count)
+                
+                # Display tables by status
+                if existing_count > 0:
+                    with st.expander("Existing Tags", expanded=True):
+                        existing_df = pd.DataFrame([r for r in results if r['status'] == 'existing'])
+                        st.dataframe(existing_df)
+                
+                if new_count > 0:
+                    with st.expander("New Tags", expanded=True):
+                        new_df = pd.DataFrame([r for r in results if r['status'] == 'new'])
+                        st.dataframe(new_df)
+                        
+                        # Let user assign these new tags to products
+                        st.markdown('<div class="subheader">Assign Products to New RFID Tags</div>', unsafe_allow_html=True)
+                        
+                        # Create a product selection for each new tag
+                        new_tags = [r['rfid'] for r in results if r['status'] == 'new']
+                        
+                        if not st.session_state.products:
+                            st.warning("No products available. Please add products first.")
+                        elif not st.session_state.categories:
+                            st.warning("No categories available. Please add categories first.")
+                        else:
+                            # Batch assignment
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                selected_product_id = st.selectbox("Select Product for Batch Assignment", 
+                                                                 options=list(st.session_state.products.keys()),
+                                                                 format_func=lambda x: f"{st.session_state.products[x]['name']} (ID: {x})")
+                            with col2:
+                                selected_category = st.selectbox("Select Category for Batch Assignment",
+                                                               options=st.session_state.categories)
+                            
+                            if st.button("Batch Assign Selected Product to All New RFID Tags"):
+                                if require_permission("add"):
+                                    success_count = 0
+                                    for rfid in new_tags:
+                                        success, _ = add_rfid_tag(rfid, selected_product_id, selected_category)
+                                        if success:
+                                            success_count += 1
+                                    
+                                    st.success(f"Successfully assigned product to {success_count} out of {len(new_tags)} RFID tags")
+                                    st.rerun()
+                            
+                            # Individual assignment
+                            st.markdown("---")
+                            st.markdown("**Individual Assignment**")
+                            
+                            for rfid in new_tags:
+                                st.markdown(f"**RFID: {rfid}**")
+                                col1, col2, col3 = st.columns([2, 1, 1])
+                                
+                                with col1:
+                                    product_id = st.selectbox(f"Product for {rfid}", 
+                                                            options=list(st.session_state.products.keys()),
+                                                            format_func=lambda x: f"{st.session_state.products[x]['name']} (ID: {x})",
+                                                            key=f"product_{rfid}")
+                                
+                                with col2:
+                                    category = st.selectbox(f"Category for {rfid}", 
+                                                          options=st.session_state.categories,
+                                                          key=f"category_{rfid}")
+                                
+                                with col3:
+                                    if st.button("Assign", key=f"assign_{rfid}"):
+                                        if require_permission("add"):
+                                            success, message = add_rfid_tag(rfid, product_id, category)
+                                            if success:
+                                                st.success(message)
+                                            else:
+                                                st.error(message)
+                
+                if error_count > 0:
+                    with st.expander("Errors", expanded=True):
+                        error_df = pd.DataFrame([r for r in results if r['status'] == 'error'])
+                        st.dataframe(error_df)
+        
+        except Exception as e:
+            st.error(f"Error processing file: {str(e)}")
+def product_tab():
+    if not require_permission("view"):
+        return
+    
+    st.markdown('<div class="subheader">Product Management</div>', unsafe_allow_html=True)
+    
+    # Add new product
+    with st.expander("Add New Product", expanded=False):
+        if not has_permission("add"):
+            st.warning("You don't have permission to add products")
+        else:
+            with st.form("add_product_form"):
+                product_id = st.text_input("Product ID")
+                name = st.text_input("Product Name")
+                description = st.text_area("Description")
+                
+                if st.session_state.categories:
+                    category = st.selectbox("Category", options=st.session_state.categories)
+                else:
+                    st.warning("No categories available. Please add categories first.")
+                    category = None
+                
+                image = st.file_uploader("Product Image", type=["jpg", "jpeg", "png"])
+                
+                submit = st.form_submit_button("Add Product")
+                
+                if submit and product_id and name and category:
+                    if image is not None:
+                        try:
+                            image_data = Image.open(image)
+                            success, message = add_product(product_id, name, description, category, image_data)
+                        except Exception as e:
+                            success = False
+                            message = f"Error processing image: {str(e)}"
+                    else:
+                        success, message = add_product(product_id, name, description, category)
+                    
+                    if success:
+                        st.success(message)
+                    else:
+                        st.error(message)
+                elif submit:
+                    st.error("Product ID, Name, and Category are required")
+    
+    # Manage categories
+    with st.expander("Manage Categories", expanded=False):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**Add Category**")
+            if has_permission("add"):
+                with st.form("add_category_form"):
+                    category_name = st.text_input("Category Name")
+                    submit = st.form_submit_button("Add Category")
+                    
+                    if submit and category_name:
+                        success, message = add_category(category_name)
+                        if success:
+                            st.success(message)
+                        else:
+                            st.error(message)
+                    elif submit:
+                        st.error("Category name is required")
+            else:
+                st.warning("You don't have permission to add categories")
+        
+        with col2:
+            st.markdown("**Delete Category**")
+            if has_permission("delete"):
+                if st.session_state.categories:
+                    with st.form("delete_category_form"):
+                        category_to_delete = st.selectbox("Select Category", options=st.session_state.categories)
+                        submit = st.form_submit_button("Delete Category")
+                        
+                        if submit and category_to_delete:
+                            success, message = delete_category(category_to_delete)
+                            if success:
+                                st.success(message)
+                            else:
+                                st.error(message)
+                else:
+                    st.info("No categories to delete")
+            else:
+                st.warning("You don't have permission to delete categories")
+    
+    # Display products
+    st.markdown("### Products")
+    
+    if not st.session_state.products:
+        st.info("No products available")
+    else:
+        # Search and filter
+        search = st.text_input("Search Products", placeholder="Enter product name or ID")
+        
+        if st.session_state.categories:
+            filter_category = st.multiselect("Filter by Category", options=["All"] + st.session_state.categories, default=["All"])
+        else:
+            filter_category = ["All"]
+        
+        # Prepare filtered data
+        filtered_products = {}
+        
+        for pid, product in st.session_state.products.items():
+            # Apply search filter
+            if search and search.lower() not in product['name'].lower() and search.lower() not in pid.lower():
+                continue
             
-            col1, col2 = st.columns(2)
+            # Apply category filter
+            if "All" not in filter_category and product['category'] not in filter_category:
+                continue
+            
+            filtered_products[pid] = product
+        
+        if not filtered_products:
+            st.info("No products match the search/filter criteria")
+        else:
+            # Display products in a grid
+            cols = st.columns(3)
+            
+            for i, (pid, product) in enumerate(filtered_products.items()):
+                col_index = i % 3
+                
+                with cols[col_index]:
+                    with st.container():
+                        st.markdown(f"**{product['name']}**")
+                        st.markdown(f"ID: {pid}")
+                        st.markdown(f"Category: {product['category']}")
+                        
+                        # Display image if available
+                        if product.get('image') and os.path.exists(product['image']):
+                            try:
+                                img = Image.open(product['image'])
+                                st.image(img, width=200)
+                            except Exception as e:
+                                st.error(f"Error loading image: {str(e)}")
+                        
+                        st.markdown(f"Description: {product['description'] if product['description'] else 'No description'}")
+                        
+                        # Edit/Delete buttons
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            if has_permission("edit"):
+                                if st.button("Edit", key=f"edit_{pid}"):
+                                    st.session_state.edit_product_id = pid
+                            else:
+                                st.markdown("*Edit*")
+                        
+                        with col2:
+                            if has_permission("delete"):
+                                if st.button("Delete", key=f"delete_{pid}"):
+                                    success, message = delete_product(pid)
+                                    if success:
+                                        st.success(message)
+                                        st.rerun()
+                                    else:
+                                        st.error(message)
+                            else:
+                                st.markdown("*Delete*")
+                        
+                        st.markdown("---")
+        
+        # Handle product editing
+        if hasattr(st.session_state, 'edit_product_id'):
+            pid = st.session_state.edit_product_id
+            
+            if pid in st.session_state.products:
+                st.markdown(f"### Edit Product: {st.session_state.products[pid]['name']}")
+                
+                with st.form("edit_product_form"):
+                    name = st.text_input("Product Name", value=st.session_state.products[pid]['name'])
+                    description = st.text_area("Description", value=st.session_state.products[pid]['description'])
+                    
+                    if st.session_state.categories:
+                        category = st.selectbox("Category", 
+                                            options=st.session_state.categories,
+                                            index=st.session_state.categories.index(st.session_state.products[pid]['category']) if st.session_state.products[pid]['category'] in st.session_state.categories else 0)
+                    else:
+                        category = None
+                        st.warning("No categories available")
+                    
+                    st.markdown("Upload new image (leave empty to keep current image)")
+                    image = st.file_uploader("Product Image", type=["jpg", "jpeg", "png"], key="edit_image")
+                    
+                    cancel_col, submit_col = st.columns(2)
+                    
+                    with cancel_col:
+                        if st.form_submit_button("Cancel"):
+                            del st.session_state.edit_product_id
+                            st.rerun()
+                    
+                    with submit_col:
+                        submit = st.form_submit_button("Update Product")
+                        
+                        if submit:
+                            if image is not None:
+                                try:
+                                    image_data = Image.open(image)
+                                    success, message = update_product(pid, name, description, category, image_data)
+                                except Exception as e:
+                                    success = False
+                                    message = f"Error processing image: {str(e)}"
+                            else:
+                                success, message = update_product(pid, name, description, category)
+                            
+                            if success:
+                                st.success(message)
+                                del st.session_state.edit_product_id
+                                st.rerun()
+                            else:
+                                st.error(message)
+def inventory_tab():
+    if not require_permission("view"):
+        return
+    
+    st.markdown('<div class="subheader">Inventory Management</div>', unsafe_allow_html=True)
+    
+    # Branch selector
+    st.markdown("### Branch Selection")
+    
+    branches = list(st.session_state.branches.keys())
+    branch_names = [st.session_state.branches[b]['name'] for b in branches]
+    
+    selected_branch_index = branches.index(st.session_state.current_branch) if st.session_state.current_branch in branches else 0
+    selected_branch = st.selectbox("Select Branch", options=branches, format_func=lambda x: st.session_state.branches[x]['name'], index=selected_branch_index)
+    
+    if selected_branch != st.session_state.current_branch:
+        st.session_state.current_branch = selected_branch
+    
+    # Branch management
+    with st.expander("Branch Management", expanded=False):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**Add Branch**")
+            if has_permission("add"):
+                with st.form("add_branch_form"):
+                    branch_id = st.text_input("Branch ID")
+                    branch_name = st.text_input("Branch Name")
+                    branch_address = st.text_area("Branch Address")
+                    
+                    submit = st.form_submit_button("Add Branch")
+                    
+                    if submit and branch_id and branch_name:
+                        success, message = add_branch(branch_id, branch_name, branch_address)
+                        if success:
+                            st.success(message)
+                        else:
+                            st.error(message)
+                    elif submit:
+                        st.error("Branch ID and Name are required")
+            else:
+                st.warning("You don't have permission to add branches")
+        
+        with col2:
+            st.markdown("**Update/Delete Branch**")
+            if has_permission("edit") or has_permission("delete"):
+                branch_to_manage = st.selectbox("Select Branch to Manage", 
+                                             options=branches,
+                                             format_func=lambda x: st.session_state.branches[x]['name'])
+                
+                if branch_to_manage:
+                    st.markdown(f"**Branch Details: {st.session_state.branches[branch_to_manage]['name']}**")
+                    st.markdown(f"Address: {st.session_state.branches[branch_to_manage]['address']}")
+                    
+                    if has_permission("edit"):
+                        st.markdown("**Update Branch**")
+                        with st.form("update_branch_form"):
+                            new_name = st.text_input("New Name", value=st.session_state.branches[branch_to_manage]['name'])
+                            new_address = st.text_area("New Address", value=st.session_state.branches[branch_to_manage]['address'])
+                            
+                            submit = st.form_submit_button("Update Branch")
+                            
+                            if submit:
+                                success, message = update_branch(branch_to_manage, new_name, new_address)
+                                if success:
+                                    st.success(message)
+                                else:
+                                    st.error(message)
+                    
+                    if has_permission("delete") and branch_to_manage != "main":
+                        if st.button("Delete Branch"):
+                            success, message = delete_branch(branch_to_manage)
+                            if success:
+                                st.success(message)
+                                st.rerun()
+                            else:
+                                st.error(message)
+            else:
+                st.warning("You don't have permission to edit or delete branches")
+    
+    # Display inventory for selected branch
+    st.markdown(f"### Inventory for {st.session_state.branches[selected_branch]['name']}")
+    
+    # Filter inventory by branch
+    branch_inventory = {rfid: data for rfid, data in st.session_state.rfid_data.items() 
+                      if data['branch_id'] == selected_branch}
+    
+    if not branch_inventory:
+        st.info(f"No items in {st.session_state.branches[selected_branch]['name']}")
+    else:
+        # Convert to DataFrame for display
+        inventory_data = []
+        for rfid, data in branch_inventory.items():
+            product_id = data['product_id']
+            product_name = st.session_state.products[product_id]['name'] if product_id in st.session_state.products else "Unknown"
+            category = data['category']
+            added_at = data['added_at']
+            
+            inventory_data.append({
+                'RFID': rfid,
+                'Product ID': product_id,
+                'Product Name': product_name,
+                'Category': category,
+                'Added At': added_at
+            })
+        
+        inventory_df = pd.DataFrame(inventory_data)
+        
+        # Search and filter
+        search = st.text_input("Search Inventory", placeholder="Enter RFID, product name or ID")
+        
+        if st.session_state.categories:
+            filter_category = st.multiselect("Filter by Category", options=["All"] + st.session_state.categories, default=["All"])
+        else:
+            filter_category = ["All"]
+        
+        # Apply filters
+        filtered_df = inventory_df.copy()
+        
+        if search:
+            filtered_df = filtered_df[
+                filtered_df['RFID'].str.contains(search, case=False) |
+                filtered_df['Product ID'].str.contains(search, case=False) |
+                filtered_df['Product Name'].str.contains(search, case=False)
+            ]
+        
+        if "All" not in filter_category:
+            filtered_df = filtered_df[filtered_df['Category'].isin(filter_category)]
+        
+        # Display inventory
+        if filtered_df.empty:
+            st.info("No items match the search/filter criteria")
+        else:
+            st.dataframe(filtered_df, use_container_width=True)
+            
+            # Summary metrics
+            st.markdown("### Inventory Summary")
+            col1, col2, col3 = st.columns(3)
             
             with col1:
-                name = st.text_input("اسم المنتج")
-                description = st.text_area("وصف المنتج")
-                category = st.selectbox("الفئة", options=list(category_dict.keys()), format_func=lambda x: category_dict[x])
+                st.metric("Total Items", len(filtered_df))
             
             with col2:
-                price = st.number_input("السعر", min_value=0.0, format="%.2f")
-                barcode = st.text_input("الباركود (اختياري)")
-                uploaded_file = st.file_uploader("صورة المنتج", type=["jpg", "png", "jpeg"])
+                categories_count = filtered_df['Category'].value_counts()
+                most_common_category = categories_count.index[0] if not categories_count.empty else "None"
+                st.metric("Most Common Category", most_common_category, categories_count[most_common_category] if not categories_count.empty else 0)
             
-            image_data = None
-            if uploaded_file is not None:
-                image_data = uploaded_file.getvalue()
+            with col3:
+                products_count = filtered_df['Product Name'].value_counts()
+                most_common_product = products_count.index[0] if not products_count.empty else "None"
+                st.metric("Most Common Product", most_common_product, products_count[most_common_product] if not products_count.empty else 0)
             
-            if st.button("إضافة المنتج"):
-                if name and category != 0:
-                    try:
-                        c.execute('''
-                            INSERT INTO products (name, description, category_id, price, barcode, image)
-                            VALUES (?, ?, ?, ?, ?, ?)
-                        ''', (name, description, category, price, barcode, image_data))
-                        
-                        # Get the new product id
-                        product_id = c.lastrowid
-                        
-                        # Add initial inventory entry with 0 quantity for all branches
-                        c.execute('SELECT id FROM branches')
-                        branches = c.fetchall()
-                        
-                        for branch_id in [b[0] for b in branches]:
-                            c.execute('''
-                                INSERT INTO inventory (product_id, branch_id, quantity, last_updated)
-                                VALUES (?, ?, ?, ?)
-                            ''', (product_id, branch_id, 0, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-                        
-                        conn.commit()
-                        st.success(f"تم إضافة المنتج '{name}' بنجاح")
-                    except Exception as e:
-                        st.error(f"حدث خطأ أثناء إضافة المنتج: {e}")
-                else:
-                    st.warning("الرجاء إدخال اسم المنتج واختيار الفئة")
-        
-        with tab2:
-            st.header("تعديل منتج")
+            # Category distribution
+            st.markdown("### Category Distribution")
+            category_counts = filtered_df['Category'].value_counts().reset_index()
+            category_counts.columns = ['Category', 'Count']
             
-            # Get products for dropdown
-            c.execute("SELECT id, name FROM products")
-            products = c.fetchall()
-            product_dict = {prod[0]: prod[1] for prod in products}
-            
-            if product_dict:
-                product_id = st.selectbox("اختر المنتج للتعديل", options=list(product_dict.keys()), format_func=lambda x: product_dict[x])
-                
-                # Get current product data
-                c.execute("SELECT name, description, category_id, price, barcode FROM products WHERE id = ?", (product_id,))
-                product_data = c.fetchone()
-                
-                if product_data:
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        updated_name = st.text_input("اسم المنتج", value=product_data[0])
-                        updated_description = st.text_area("وصف المنتج", value=product_data[1] or "")
-                        category_index = 0
-                        if product_data[2] in category_dict:
-                            category_index = list(category_dict.keys()).index(product_data[2])
-                        updated_category = st.selectbox("الفئة", options=list(category_dict.keys()), 
-                                                      format_func=lambda x: category_dict[x], 
-                                                      index=category_index)
-                    
-                    with col2:
-                        updated_price = st.number_input("السعر", value=float(product_data[3]) if product_data[3] else 0.0, format="%.2f")
-                        updated_barcode = st.text_input("الباركود", value=product_data[4] or "")
-                        updated_image = st.file_uploader("تحديث صورة المنتج (اترك فارغاً للاحتفاظ بالصورة الحالية)", type=["jpg", "png", "jpeg"])
-                    
-                    if st.button("تحديث المنتج"):
-                        try:
-                            if updated_image:
-                                image_data = updated_image.getvalue()
-                                c.execute('''
-                                    UPDATE products
-                                    SET name = ?, description = ?, category_id = ?, price = ?, barcode = ?, image = ?
-                                    WHERE id = ?
-                                ''', (updated_name, updated_description, updated_category, updated_price, updated_barcode, image_data, product_id))
-                            else:
-                                c.execute('''
-                                    UPDATE products
-                                    SET name = ?, description = ?, category_id = ?, price = ?, barcode = ?
-                                    WHERE id = ?
-                                ''', (updated_name, updated_description, updated_category, updated_price, updated_barcode, product_id))
-                            
-                            conn.commit()
-                            st.success(f"تم تحديث المنتج '{updated_name}' بنجاح")
-                        except Exception as e:
-                            st.error(f"حدث خطأ أثناء تحديث المنتج: {e}")
-            else:
-                st.info("لا توجد منتجات لتعديلها")
-        
-        with tab3:
-            st.header("حذف منتج")
-            
-            if product_dict:
-                product_to_delete = st.selectbox("اختر المنتج للحذف", options=list(product_dict.keys()), format_func=lambda x: product_dict[x], key="delete_product_select")
-                
-                # Display product details for confirmation
-                c.execute('''
-                    SELECT p.name, p.description, c.name, p.price
-                    FROM products p
-                    LEFT JOIN categories c ON p.category_id = c.id
-                    WHERE p.id = ?
-                ''', (product_to_delete,))
-                product_details = c.fetchone()
-                
-                if product_details:
-                    st.markdown("### تفاصيل المنتج المراد حذفه")
-                    st.markdown(f"**الاسم:** {product_details[0]}")
-                    st.markdown(f"**الوصف:** {product_details[1] or 'لا يوجد'}")
-                    st.markdown(f"**الفئة:** {product_details[2] or 'غير مصنف'}")
-                    st.markdown(f"**السعر:** {product_details[3]} ريال")
-                
-                # Check if product is used in inventory or sales
-                c.execute("SELECT SUM(quantity) FROM inventory WHERE product_id = ?", (product_to_delete,))
-                inventory_count = c.fetchone()[0] or 0
-                
-                c.execute("SELECT COUNT(*) FROM sales WHERE product_id = ?", (product_to_delete,))
-                sales_count = c.fetchone()[0]
-                
-                if inventory_count > 0:
-                    st.warning(f"هذا المنتج لديه {inventory_count} قطعة في المخزون. تأكد من تصفير المخزون قبل الحذف.")
-                
-                if sales_count > 0:
-                    st.warning(f"هذا المنتج مرتبط بـ {sales_count} عمليات بيع سابقة.")
-                
-                # Confirmation checkbox
-                confirm_delete = st.checkbox("أنا متأكد من حذف هذا المنتج وأتفهم أن هذا الإجراء لا يمكن التراجع عنه", key="confirm_delete_product")
-                
-                if st.button("حذف المنتج", key="delete_product_btn") and confirm_delete:
-                    try:
-                        # Delete related inventory records
-                        c.execute("DELETE FROM inventory WHERE product_id = ?", (product_to_delete,))
-                        # Delete related RFID tags
-                        c.execute("DELETE FROM rfid_tags WHERE product_id = ?", (product_to_delete,))
-                        # Delete product
-                        c.execute("DELETE FROM products WHERE id = ?", (product_to_delete,))
-                        
-                        conn.commit()
-                        st.success(f"تم حذف المنتج '{product_dict[product_to_delete]}' بنجاح")
-                    except Exception as e:
-                        st.error(f"حدث خطأ أثناء حذف المنتج: {e}")
-            else:
-                st.info("لا توجد منتجات لحذفها")
-        
-        with tab4:
-            st.header("عرض المنتجات")
-            
-            # Get all products with category info
-            c.execute('''
-                SELECT p.id, p.name, p.description, c.name, p.price, p.barcode
-                FROM products p
-                LEFT JOIN categories c ON p.category_id = c.id
-                ORDER BY p.id DESC
-            ''')
-            products_data = c.fetchall()
-            
-            if products_data:
-                products_list = []
-                for prod in products_data:
-                    products_list.append({
-                        "المعرف": prod[0],
-                        "اسم المنتج": prod[1],
-                        "الوصف": prod[2] or "",
-                        "الفئة": prod[3] or "غير مصنف",
-                        "السعر": f"{prod[4]} ريال" if prod[4] else "0.00 ريال",
-                        "الباركود": prod[5] or ""
-                    })
-                
-                df_products = pd.DataFrame(products_list)
-                
-                # Add search functionality
-                search_term = st.text_input("البحث عن منتج")
-                
-                if search_term:
-                    df_filtered = df_products[df_products['اسم المنتج'].str.contains(search_term, case=False, na=False)]
-                    st.table(df_filtered)
-                else:
-                    st.table(df_products)
-                
-                # Add download button
-                st.markdown(convert_df_to_csv_download_link(df_products, "products.csv"), unsafe_allow_html=True)
-            else:
-                st.info("لا توجد منتجات لعرضها")
-    # Inventory Management
-    elif menu == "عرض المخزون":
-        st.title("عرض وإدارة المخزون")
-        
-        tab1, tab2 = st.tabs(["عرض المخزون", "تعديل المخزون"])
-        
-        with tab1:
-            st.header(f"المخزون الحالي في {get_branch_name(st.session_state.current_branch)}")
-            
-            # Get inventory data with product info for current branch
-            c.execute('''
-                SELECT i.id, p.name, c.name, i.quantity, p.price, (p.price * i.quantity) as total_value, i.last_updated, p.id
-                FROM inventory i
-                JOIN products p ON i.product_id = p.id
-                LEFT JOIN categories c ON p.category_id = c.id
-                WHERE i.branch_id = ?
-                ORDER BY c.name, p.name
-            ''', (st.session_state.current_branch,))
-            inventory_data = c.fetchall()
-            
-            if inventory_data:
-                inventory_list = []
-                for inv in inventory_data:
-                    inventory_list.append({
-                        "معرف المخزون": inv[0],
-                        "اسم المنتج": inv[1],
-                        "الفئة": inv[2] or "غير مصنف",
-                        "الكمية": inv[3],
-                        "سعر الوحدة": f"{inv[4]} ريال" if inv[4] else "0.00 ريال",
-                        "القيمة الإجمالية": f"{inv[5]} ريال" if inv[5] else "0.00 ريال",
-                        "آخر تحديث": inv[6],
-                        "معرف المنتج": inv[7]
-                    })
-                
-                df_inventory = pd.DataFrame(inventory_list)
-                
-                # Add filter by category
-                c.execute("SELECT id, name FROM categories")
-                categories = c.fetchall()
-                category_dict = {0: "جميع الفئات"}
-                category_dict.update({cat[0]: cat[1] for cat in categories})
-                
-                filter_category = st.selectbox("تصفية حسب الفئة", options=list(category_dict.keys()), format_func=lambda x: category_dict[x])
-                
-                if filter_category != 0:
-                    df_filtered = df_inventory[df_inventory['الفئة'] == category_dict[filter_category]]
-                else:
-                    df_filtered = df_inventory
-                
-                # Add low stock filter
-                show_low_stock_only = st.checkbox("عرض المخزون المنخفض فقط (أقل من 10)")
-                
-                if show_low_stock_only:
-                    df_filtered = df_filtered[df_filtered['الكمية'] < 10]
-                
-                # Show inventory table
-                st.table(df_filtered[["اسم المنتج", "الفئة", "الكمية", "سعر الوحدة", "القيمة الإجمالية", "آخر تحديث"]])
-                
-                # Add download button
-                st.markdown(convert_df_to_csv_download_link(df_filtered, "inventory.csv"), unsafe_allow_html=True)
-                
-                # Show inventory summary
-                st.subheader("ملخص المخزون")
-                total_items = df_filtered['الكمية'].sum()
-                
-                # Extract numeric value from price string and sum
-                total_value = 0
-                for value in df_filtered['القيمة الإجمالية']:
-                    try:
-                        if isinstance(value, str) and "ريال" in value:
-                            total_value += float(value.replace(" ريال", ""))
-                    except:
-                        pass
-                
-                col1, col2 = st.columns(2)
-                col1.metric("إجمالي عدد القطع", total_items)
-                col2.metric("إجمالي قيمة المخزون", f"{total_value:.2f} ريال")
-                
-                # Show inventory by category pie chart
-                st.subheader("توزيع المخزون حسب الفئات")
-                
-                category_summary = df_inventory.groupby('الفئة')['الكمية'].sum().reset_index()
-                if not category_summary.empty and category_summary['الكمية'].sum() > 0:
-                    fig = px.pie(category_summary, values='الكمية', names='الفئة', hole=0.4)
-                    st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("لا توجد بيانات مخزون لعرضها")
-        
-        with tab2:
-            st.header("تعديل المخزون")
-            
-            # Get products for dropdown
-            c.execute("SELECT id, name FROM products")
-            products = c.fetchall()
-            product_dict = {prod[0]: prod[1] for prod in products}
-            
-            if product_dict:
+            if not category_counts.empty:
+                fig = px.pie(category_counts, names='Category', values='Count', hole=0.4)
+                st.plotly_chart(fig, use_container_width=True)
+    
+    # Transfer items
+    st.markdown("### Transfer Items")
+    
+    if len(st.session_state.branches) <= 1:
+        st.info("You need at least two branches to transfer items")
+    else:
+        with st.expander("Transfer Items Between Branches", expanded=False):
+            if has_permission("edit"):
+                # Source and destination branches
                 col1, col2 = st.columns(2)
                 
                 with col1:
-                    selected_product = st.selectbox("اختر المنتج", options=list(product_dict.keys()), format_func=lambda x: product_dict[x])
-                    
-                    # Get current inventory quantity
-                    c.execute('''
-                        SELECT quantity FROM inventory
-                        WHERE product_id = ? AND branch_id = ?
-                    ''', (selected_product, st.session_state.current_branch))
-                    current_qty = c.fetchone()
-                    current_qty = current_qty[0] if current_qty else 0
-                    
-                    st.metric("الكمية الحالية", current_qty)
+                    source_branch = st.selectbox("From Branch", 
+                                              options=branches,
+                                              format_func=lambda x: st.session_state.branches[x]['name'],
+                                              key="source_branch")
                 
                 with col2:
-                    operation = st.radio("نوع العملية", ["إضافة", "خصم", "تعيين قيمة محددة"])
-                    quantity = st.number_input("الكمية", min_value=1, value=1)
+                    # Filter out the source branch
+                    dest_branches = [b for b in branches if b != source_branch]
+                    destination_branch = st.selectbox("To Branch", 
+                                                 options=dest_branches,
+                                                 format_func=lambda x: st.session_state.branches[x]['name'],
+                                                 key="dest_branch")
                 
-                st.markdown("---")
+                # Get items in source branch
+                source_inventory = {rfid: data for rfid, data in st.session_state.rfid_data.items() 
+                                if data['branch_id'] == source_branch}
                 
-                notes = st.text_area("ملاحظات (اختياري)")
-                
-                if st.button("تحديث المخزون"):
-                    new_quantity = current_qty
+                if not source_inventory:
+                    st.info(f"No items in {st.session_state.branches[source_branch]['name']} to transfer")
+                else:
+                    # Convert to list for selection
+                    source_items = []
+                    for rfid, data in source_inventory.items():
+                        product_id = data['product_id']
+                        product_name = st.session_state.products[product_id]['name'] if product_id in st.session_state.products else "Unknown"
+                        source_items.append((rfid, f"{product_name} (RFID: {rfid})"))
                     
-                    if operation == "إضافة":
-                        new_quantity = current_qty + quantity
-                    elif operation == "خصم":
-                        new_quantity = max(0, current_qty - quantity)
-                    else:  # تعيين قيمة محددة
-                        new_quantity = quantity
+                    # Allow selection of items to transfer
+                    selected_rfids = st.multiselect("Select Items to Transfer", 
+                                                options=[i[0] for i in source_items],
+                                                format_func=lambda x: next((i[1] for i in source_items if i[0] == x), x))
                     
-                    try:
-                        c.execute('''
-                            UPDATE inventory
-                            SET quantity = ?, last_updated = ?
-                            WHERE product_id = ? AND branch_id = ?
-                        ''', (new_quantity, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), selected_product, st.session_state.current_branch))
-                        
-                        conn.commit()
-                        st.success(f"تم تحديث مخزون المنتج '{product_dict[selected_product]}' بنجاح. الكمية الجديدة: {new_quantity}")
-                    except Exception as e:
-                        st.error(f"حدث خطأ أثناء تحديث المخزون: {e}")
-            else:
-                st.info("لا توجد منتجات لتعديل مخزونها")
-    
-    # RFID Data Upload
-    elif menu == "رفع بيانات RFID":
-        st.title("رفع وإدارة بيانات RFID")
-        
-        tab1, tab2, tab3 = st.tabs(["رفع بيانات RFID", "ربط التاج RFID بمنتج", "عرض بيانات RFID"])
-        
-        with tab1:
-            st.header("رفع بيانات RFID")
-            
-            upload_method = st.radio("طريقة الرفع", ["ملف CSV", "إدخال يدوي"])
-            
-            if upload_method == "ملف CSV":
-                st.write("قم بتحميل ملف CSV يحتوي على أعمدة: tag_id, product_id (اختياري), quantity (اختياري)")
-                uploaded_file = st.file_uploader("اختر ملف CSV", type=["csv"])
-                
-                if uploaded_file is not None:
-                    try:
-                        df = pd.read_csv(uploaded_file)
-                        st.write("معاينة البيانات:")
-                        st.write(df.head())
-                        
-                        if "tag_id" not in df.columns:
-                            st.error("يجب أن يحتوي الملف على عمود 'tag_id'")
-                        else:
-                            if st.button("معالجة البيانات"):
-                                success_count = 0
-                                error_count = 0
-                                
-                                for i, row in df.iterrows():
-                                    tag_id = row["tag_id"]
-                                    product_id = row.get("product_id", None)
-                                    
-                                    # Check if tag already exists
-                                    c.execute("SELECT id FROM rfid_tags WHERE tag_id = ?", (tag_id,))
-                                    tag_exists = c.fetchone()
-                                    
-                                    if tag_exists:
-                                        # Update existing tag
-                                        if product_id:
-                                            c.execute('''
-                                                UPDATE rfid_tags
-                                                SET product_id = ?, assigned_at = ?, status = 'assigned'
-                                                WHERE tag_id = ?
-                                            ''', (product_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), tag_id))
-                                        success_count += 1
-                                    else:
-                                        # Insert new tag
-                                        try:
-                                            if product_id:
-                                                c.execute('''
-                                                    INSERT INTO rfid_tags (tag_id, product_id, assigned_at, status)
-                                                    VALUES (?, ?, ?, 'assigned')
-                                                ''', (tag_id, product_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-                                            else:
-                                                c.execute('''
-                                                    INSERT INTO rfid_tags (tag_id, status)
-                                                    VALUES (?, 'unassigned')
-                                                ''', (tag_id,))
-                                            success_count += 1
-                                        except Exception:
-                                            error_count += 1
-                                
-                                conn.commit()
-                                st.success(f"تم معالجة {success_count} تاج RFID بنجاح. فشل في معالجة {error_count} تاج.")
-                    except Exception as e:
-                        st.error(f"حدث خطأ أثناء معالجة الملف: {e}")
-            
-            else:  # إدخال يدوي
-                st.subheader("إضافة تاج RFID جديد")
-                
-                manual_tag_id = st.text_input("معرف التاج RFID")
-                
-                # Get products for dropdown
-                c.execute("SELECT id, name FROM products")
-                products = c.fetchall()
-                product_dict = {0: "اختر منتج (اختياري)"}
-                product_dict.update({prod[0]: prod[1] for prod in products})
-                
-                manual_product_id = st.selectbox("المنتج", options=list(product_dict.keys()), format_func=lambda x: product_dict[x])
-                if manual_product_id == 0:
-                    manual_product_id = None
-                
-                if st.button("إضافة تاج RFID"):
-                    if manual_tag_id:
-                        try:
-                            # Check if tag already exists
-                            c.execute("SELECT id FROM rfid_tags WHERE tag_id = ?", (manual_tag_id,))
-                            tag_exists = c.fetchone()
+                    if selected_rfids:
+                        if st.button(f"Transfer {len(selected_rfids)} Items to {st.session_state.branches[destination_branch]['name']}"):
+                            results = []
+                            for rfid in selected_rfids:
+                                success, message = transfer_product(rfid, destination_branch)
+                                results.append((rfid, success, message))
                             
-                            if tag_exists:
-                                st.warning(f"التاج {manual_tag_id} موجود بالفعل في قاعدة البيانات")
+                            # Show results
+                            success_count = sum(1 for _, success, _ in results if success)
+                            if success_count > 0:
+                                st.success(f"Successfully transferred {success_count} out of {len(results)} items")
+                                
+                                # Show failures if any
+                                failures = [(rfid, message) for rfid, success, message in results if not success]
+                                if failures:
+                                    st.error(f"Failed to transfer {len(failures)} items")
+                                    for rfid, message in failures:
+                                        st.error(f"RFID {rfid}: {message}")
+                                
+                                st.rerun()
                             else:
-                                if manual_product_id:
-                                    c.execute('''
-                                        INSERT INTO rfid_tags (tag_id, product_id, assigned_at, status)
-                                        VALUES (?, ?, ?, 'assigned')
-                                    ''', (manual_tag_id, manual_product_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-                                else:
-                                    c.execute('''
-                                        INSERT INTO rfid_tags (tag_id, status)
-                                        VALUES (?, 'unassigned')
-                                    ''', (manual_tag_id,))
-                                
-                                conn.commit()
-                                st.success(f"تم إضافة التاج {manual_tag_id} بنجاح")
-                        except Exception as e:
-                            st.error(f"حدث خطأ أثناء إضافة التاج: {e}")
-                    else:
-                        st.warning("الرجاء إدخال معرف التاج RFID")
-            
-            # Generate random RFID tags for testing
-            st.markdown("---")
-            st.subheader("توليد تاجات RFID عشوائية للاختبار")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                random_tags_count = st.number_input("عدد التاجات", min_value=1, max_value=100, value=5)
-            with col2:
-                random_tags_assigned = st.checkbox("ربط بمنتجات عشوائية")
-            
-            if st.button("توليد تاجات RFID عشوائية"):
-                try:
-                    # Get product IDs if assigning to random products
-                    product_ids = []
-                    if random_tags_assigned:
-                        c.execute("SELECT id FROM products")
-                        product_ids = [p[0] for p in c.fetchall()]
-                    
-                    generated_tags = []
-                    for _ in range(random_tags_count):
-                        tag_id = generate_rfid_tag()
-                        
-                        # Check if product IDs exist for assignment
-                        product_id = None
-                        if product_ids:
-                            product_id = random.choice(product_ids)
-                        
-                        if product_id:
-                            c.execute('''
-                                INSERT INTO rfid_tags (tag_id, product_id, assigned_at, status)
-                                VALUES (?, ?, ?, 'assigned')
-                            ''', (tag_id, product_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-                        else:
-                            c.execute('''
-                                INSERT INTO rfid_tags (tag_id, status)
-                                VALUES (?, 'unassigned')
-                            ''', (tag_id,))
-                        
-                        generated_tags.append(tag_id)
-                    
-                    conn.commit()
-                    st.success(f"تم توليد {random_tags_count} تاجات RFID عشوائية بنجاح")
-                    
-                    # Display generated tags
-                    st.write("التاجات المولدة:")
-                    for tag in generated_tags:
-                        st.code(tag)
-                except Exception as e:
-                    st.error(f"حدث خطأ أثناء توليد التاجات: {e}")
-        
-        with tab2:
-            st.header("ربط تاج RFID بمنتج")
-            
-            # Get unassigned RFID tags
-            c.execute("SELECT id, tag_id FROM rfid_tags WHERE status = 'unassigned' OR product_id IS NULL")
-            unassigned_tags = c.fetchall()
-            tag_dict = {tag[0]: tag[1] for tag in unassigned_tags}
-            
-            if tag_dict:
-                selected_tag_id = st.selectbox("اختر تاج RFID", options=list(tag_dict.keys()), format_func=lambda x: tag_dict[x])
-                
-                # Get products for dropdown
-                c.execute("SELECT id, name FROM products")
-                products = c.fetchall()
-                product_dict = {prod[0]: prod[1] for prod in products}
-                
-                if product_dict:
-                    selected_product_id = st.selectbox("اختر المنتج", options=list(product_dict.keys()), format_func=lambda x: product_dict[x])
-                    
-                    if st.button("ربط التاج بالمنتج"):
-                        try:
-                            c.execute('''
-                                UPDATE rfid_tags
-                                SET product_id = ?, assigned_at = ?, status = 'assigned'
-                                WHERE id = ?
-                            ''', (selected_product_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), selected_tag_id))
-                            
-                            conn.commit()
-                            st.success(f"تم ربط التاج {tag_dict[selected_tag_id]} بالمنتج {product_dict[selected_product_id]} بنجاح")
-                        except Exception as e:
-                            st.error(f"حدث خطأ أثناء ربط التاج بالمنتج: {e}")
-                else:
-                    st.info("لا توجد منتجات لربط التاجات بها")
+                                st.error("Failed to transfer any items")
+                                for rfid, _, message in results:
+                                    st.error(f"RFID {rfid}: {message}")
             else:
-                st.info("لا توجد تاجات RFID غير مرتبطة")
-        
-        with tab3:
-            st.header("عرض بيانات RFID")
-            
-            # Get RFID tags with product info
-            c.execute('''
-                SELECT r.id, r.tag_id, p.name, r.status, r.assigned_at
-                FROM rfid_tags r
-                LEFT JOIN products p ON r.product_id = p.id
-                ORDER BY r.id DESC
-            ''')
-            tags_data = c.fetchall()
-            
-            if tags_data:
-                tags_list = []
-                for tag in tags_data:
-                    tags_list.append({
-                        "المعرف": tag[0],
-                        "تاج RFID": tag[1],
-                        "المنتج": tag[2] or "غير مرتبط",
-                        "الحالة": "مرتبط" if tag[3] == "assigned" else "غير مرتبط",
-                        "تاريخ الربط": tag[4] or ""
-                    })
-                
-                df_tags = pd.DataFrame(tags_list)
-                
-                # Add filter by status
-                status_filter = st.radio("تصفية حسب الحالة", ["الكل", "مرتبط", "غير مرتبط"])
-                
-                if status_filter == "مرتبط":
-                    df_filtered = df_tags[df_tags['الحالة'] == "مرتبط"]
-                elif status_filter == "غير مرتبط":
-                    df_filtered = df_tags[df_tags['الحالة'] == "غير مرتبط"]
-                else:
-                    df_filtered = df_tags
-                
-                # Add search functionality
-                search_term = st.text_input("البحث عن تاج RFID")
-                
-                if search_term:
-                    df_filtered = df_filtered[df_filtered['تاج RFID'].str.contains(search_term, case=False, na=False)]
-                
-                # Show tags table
-                st.table(df_filtered)
-                
-                # Add download button
-                st.markdown(convert_df_to_csv_download_link(df_filtered, "rfid_tags.csv"), unsafe_allow_html=True)
-            else:
-                st.info("لا توجد تاجات RFID لعرضها")
-    # Sales Management
-    elif menu == "إدارة المبيعات":
-        st.title("إدارة المبيعات")
-        
-        tab1, tab2, tab3 = st.tabs(["تسجيل مبيعات", "عرض المبيعات", "تقارير المبيعات"])
-        
-        with tab1:
-            st.header("تسجيل عملية بيع جديدة")
+                st.warning("You don't have permission to transfer items")
+def sales_tab():
+    if not require_permission("view"):
+        return
+    
+    st.markdown('<div class="subheader">Sales Management</div>', unsafe_allow_html=True)
+    
+    # Process sales
+    with st.expander("Process Sales", expanded=False):
+        if has_permission("edit"):
+            st.markdown("### Single Item Sale")
             
             col1, col2 = st.columns(2)
             
             with col1:
-                # Get products for dropdown
-                c.execute("SELECT id, name, price FROM products")
-                products = c.fetchall()
-                product_dict = {prod[0]: f"{prod[1]} - {prod[2]} ريال" for prod in products}
+                # Select item from inventory
+                inventory_items = []
+                for rfid, data in st.session_state.rfid_data.items():
+                    product_id = data['product_id']
+                    product_name = st.session_state.products[product_id]['name'] if product_id in st.session_state.products else "Unknown"
+                    branch_name = st.session_state.branches[data['branch_id']]['name']
+                    inventory_items.append((rfid, f"{product_name} - {branch_name} (RFID: {rfid})"))
                 
-                if product_dict:
-                    selected_product = st.selectbox("اختر المنتج", options=list(product_dict.keys()), format_func=lambda x: product_dict[x])
-                    
-                    # Get current product price
-                    c.execute("SELECT price FROM products WHERE id = ?", (selected_product,))
-                    product_price = c.fetchone()[0] or 0
-                    
-                    # Get current inventory quantity
-                    c.execute('''
-                        SELECT quantity FROM inventory
-                        WHERE product_id = ? AND branch_id = ?
-                    ''', (selected_product, st.session_state.current_branch))
-                    current_qty = c.fetchone()
-                    current_qty = current_qty[0] if current_qty else 0
-                    
-                    st.metric("الكمية المتوفرة في المخزون", current_qty)
-                    
-                    quantity = st.number_input("الكمية المباعة", min_value=1, max_value=current_qty if current_qty > 0 else 1, value=1)
-                    sale_price = st.number_input("سعر البيع للوحدة", min_value=0.0, value=float(product_price), format="%.2f")
-                    
-                    total_amount = quantity * sale_price
-                    st.metric("إجمالي المبلغ", f"{total_amount:.2f} ريال")
+                if not inventory_items:
+                    st.info("No items in inventory")
+                    selected_rfid = None
                 else:
-                    st.error("لا توجد منتجات متاحة للبيع. يرجى إضافة منتجات أولاً.")
+                    selected_rfid = st.selectbox("Select Item to Sell", 
+                                              options=[i[0] for i in inventory_items],
+                                              format_func=lambda x: next((i[1] for i in inventory_items if i[0] == x), x))
             
             with col2:
-                sale_date = st.date_input("تاريخ البيع", value=datetime.now())
-                sale_time = st.time_input("وقت البيع", value=datetime.now().time())
-                
+                sale_price = st.number_input("Sale Price", min_value=0.0, step=0.01)
+                sale_date = st.date_input("Sale Date")
+                sale_time = st.time_input("Sale Time")
+            
+            if selected_rfid and st.button("Process Sale"):
+                # Combine date and time
                 sale_datetime = datetime.combine(sale_date, sale_time).strftime("%Y-%m-%d %H:%M:%S")
                 
-                reference = st.text_input("رقم المرجع (اختياري)", value=generate_reference_number("SALE"))
-                
-                notes = st.text_area("ملاحظات")
+                success, message = process_sale(selected_rfid, sale_price, sale_datetime)
+                if success:
+                    st.success(message)
+                    st.rerun()
+                else:
+                    st.error(message)
             
-            if product_dict:
-                if st.button("تسجيل عملية البيع"):
-                    if current_qty >= quantity:
-                        try:
-                            # Record sale
-                            c.execute('''
-                                INSERT INTO sales (product_id, branch_id, quantity, sale_date, amount, reference)
-                                VALUES (?, ?, ?, ?, ?, ?)
-                            ''', (selected_product, st.session_state.current_branch, quantity, sale_datetime, total_amount, reference))
-                            
-                            # Update inventory
-                            new_quantity = current_qty - quantity
-                            c.execute('''
-                                UPDATE inventory
-                                SET quantity = ?, last_updated = ?
-                                WHERE product_id = ? AND branch_id = ?
-                            ''', (new_quantity, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), selected_product, st.session_state.current_branch))
-                            
-                            conn.commit()
-                            st.success(f"تم تسجيل عملية البيع بنجاح. المرجع: {reference}")
-                        except Exception as e:
-                            st.error(f"حدث خطأ أثناء تسجيل عملية البيع: {e}")
+            st.markdown("### Batch Sales Processing")
+            st.markdown("Upload an Excel file with sales data")
+            
+            with st.expander("Instructions", expanded=False):
+                st.info("""
+                1. Upload an Excel file containing sales data.
+                2. The Excel file must have a column named 'rfid'.
+                3. Optional columns: 'sale_price' and 'sale_date'.
+                4. The system will process each sale and remove items from inventory.
+                """)
+            
+            uploaded_file = st.file_uploader("Upload Excel file with sales data", type=["xlsx", "xls"], key="sales_upload")
+            
+            if uploaded_file is not None:
+                try:
+                    df = pd.read_excel(uploaded_file)
+                    
+                    if 'rfid' not in df.columns:
+                        st.error("The Excel file must contain a column named 'rfid'")
                     else:
-                        st.error("الكمية المطلوبة غير متوفرة في المخزون")
-        
-        with tab2:
-            st.header("عرض المبيعات")
-            
-            # Date range filter
-            col1, col2 = st.columns(2)
-            with col1:
-                start_date = st.date_input("من تاريخ", value=datetime.now() - timedelta(days=30))
-            with col2:
-                end_date = st.date_input("إلى تاريخ", value=datetime.now())
-            
-            # Adjust end date to include the entire day
-            end_date_adjusted = datetime.combine(end_date, time.max).strftime("%Y-%m-%d %H:%M:%S")
-            
-            # Get sales data
-            c.execute('''
-                SELECT s.id, p.name, s.quantity, s.amount, s.sale_date, s.reference, b.name
-                FROM sales s
-                JOIN products p ON s.product_id = p.id
-                JOIN branches b ON s.branch_id = b.id
-                WHERE s.sale_date BETWEEN ? AND ? AND s.branch_id = ?
-                ORDER BY s.sale_date DESC
-            ''', (start_date, end_date_adjusted, st.session_state.current_branch))
-            sales_data = c.fetchall()
-            
-            if sales_data:
-                sales_list = []
-                for sale in sales_data:
-                    sales_list.append({
-                        "المعرف": sale[0],
-                        "المنتج": sale[1],
-                        "الكمية": sale[2],
-                        "المبلغ": f"{sale[3]:.2f} ريال",
-                        "التاريخ": sale[4],
-                        "رقم المرجع": sale[5],
-                        "الفرع": sale[6]
-                    })
+                        # Process the uploaded file
+                        results = process_sales_excel(df)
+                        
+                        # Display results
+                        st.markdown('<div class="subheader">Sales Results</div>', unsafe_allow_html=True)
+                        
+                        # Count statuses
+                        sold_count = sum(1 for r in results if r['status'] == 'sold')
+                        error_count = sum(1 for r in results if r['status'] == 'error')
+                        
+                        # Display summary
+                        col1, col2 = st.columns(2)
+                        col1.metric("Successfully Sold", sold_count)
+                        col2.metric("Errors", error_count)
+                        
+                        # Display tables by status
+                        if sold_count > 0:
+                            with st.expander("Sold Items", expanded=True):
+                                sold_df = pd.DataFrame([r for r in results if r['status'] == 'sold'])
+                                st.dataframe(sold_df)
+                        
+                        if error_count > 0:
+                            with st.expander("Errors", expanded=True):
+                                error_df = pd.DataFrame([r for r in results if r['status'] == 'error'])
+                                st.dataframe(error_df)
                 
-                df_sales = pd.DataFrame(sales_list)
-                
-                # Show sales table
-                st.table(df_sales)
-                
-                # Add download button
-                st.markdown(convert_df_to_csv_download_link(df_sales, "sales.csv"), unsafe_allow_html=True)
-                
-                # Show sales summary
-                st.subheader("ملخص المبيعات")
-                total_sales = sum(sale[3] for sale in sales_data)
-                total_items_sold = sum(sale[2] for sale in sales_data)
-                
-                col1, col2 = st.columns(2)
-                col1.metric("إجمالي المبيعات", f"{total_sales:.2f} ريال")
-                col2.metric("إجمالي القطع المباعة", total_items_sold)
-            else:
-                st.info("لا توجد مبيعات في الفترة المحددة")
-        
-        with tab3:
-            st.header("تقارير المبيعات")
-            
-            # Date range filter
-            col1, col2 = st.columns(2)
-            with col1:
-                report_start_date = st.date_input("من تاريخ", value=datetime.now() - timedelta(days=30), key="report_start")
-            with col2:
-                report_end_date = st.date_input("إلى تاريخ", value=datetime.now(), key="report_end")
-            
-            # Adjust end date to include the entire day
-            report_end_date_adjusted = datetime.combine(report_end_date, time.max).strftime("%Y-%m-%d %H:%M:%S")
-            
-            report_type = st.selectbox("نوع التقرير", ["مبيعات حسب المنتج", "مبيعات حسب اليوم", "مبيعات حسب الشهر"])
-            
-            if report_type == "مبيعات حسب المنتج":
-                # Get sales by product
-                c.execute('''
-                    SELECT p.name, SUM(s.quantity) as total_qty, SUM(s.amount) as total_amount
-                    FROM sales s
-                    JOIN products p ON s.product_id = p.id
-                    WHERE s.sale_date BETWEEN ? AND ? AND s.branch_id = ?
-                    GROUP BY p.name
-                    ORDER BY total_amount DESC
-                ''', (report_start_date, report_end_date_adjusted, st.session_state.current_branch))
-                product_sales = c.fetchall()
-                
-                if product_sales:
-                    product_sales_list = []
-                    for sale in product_sales:
-                        product_sales_list.append({
-                            "المنتج": sale[0],
-                            "إجمالي الكمية": sale[1],
-                            "إجمالي المبلغ": f"{sale[2]:.2f} ريال"
-                        })
-                    
-                    df_product_sales = pd.DataFrame(product_sales_list)
-                    
-                    # Show product sales table
-                    st.subheader("المبيعات حسب المنتج")
-                    st.table(df_product_sales)
-                    
-                    # Add download button
-                    st.markdown(convert_df_to_csv_download_link(df_product_sales, "product_sales.csv"), unsafe_allow_html=True)
-                    
-                    # Show product sales chart
-                    st.subheader("رسم بياني للمبيعات حسب المنتج")
-                    
-                    # Extract amounts without "ريال" for plotting
-                    df_for_chart = pd.DataFrame({
-                        "المنتج": [sale[0] for sale in product_sales],
-                        "إجمالي المبيعات": [sale[2] for sale in product_sales]
-                    })
-                    
-                    if len(product_sales) > 10:
-                        df_for_chart = df_for_chart.head(10)
-                        st.info("يتم عرض أعلى 10 منتجات فقط في الرسم البياني")
-                    
-                    fig = px.bar(df_for_chart, x="المنتج", y="إجمالي المبيعات", title="أفضل المنتجات مبيعاً")
-                    st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.info("لا توجد مبيعات في الفترة المحددة")
-            
-            elif report_type == "مبيعات حسب اليوم":
-                # Get sales by day
-                c.execute('''
-                    SELECT date(s.sale_date) as sale_day, SUM(s.quantity) as total_qty, SUM(s.amount) as total_amount
-                    FROM sales s
-                    WHERE s.sale_date BETWEEN ? AND ? AND s.branch_id = ?
-                    GROUP BY sale_day
-                    ORDER BY sale_day
-                ''', (report_start_date, report_end_date_adjusted, st.session_state.current_branch))
-                daily_sales = c.fetchall()
-                
-                if daily_sales:
-                    daily_sales_list = []
-                    for sale in daily_sales:
-                        daily_sales_list.append({
-                            "اليوم": sale[0],
-                            "إجمالي الكمية": sale[1],
-                            "إجمالي المبلغ": f"{sale[2]:.2f} ريال"
-                        })
-                    
-                    df_daily_sales = pd.DataFrame(daily_sales_list)
-                    
-                    # Show daily sales table
-                    st.subheader("المبيعات اليومية")
-                    st.table(df_daily_sales)
-                    
-                    # Add download button
-                    st.markdown(convert_df_to_csv_download_link(df_daily_sales, "daily_sales.csv"), unsafe_allow_html=True)
-                    
-                    # Show daily sales chart
-                    st.subheader("رسم بياني للمبيعات اليومية")
-                    
-                    # Extract amounts without "ريال" for plotting
-                    df_for_chart = pd.DataFrame({
-                        "اليوم": [sale[0] for sale in daily_sales],
-                        "إجمالي المبيعات": [sale[2] for sale in daily_sales]
-                    })
-                    
-                    fig = px.line(df_for_chart, x="اليوم", y="إجمالي المبيعات", title="المبيعات اليومية")
-                    st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.info("لا توجد مبيعات في الفترة المحددة")
-            
-            else:  # مبيعات حسب الشهر
-                # Get sales by month
-                c.execute('''
-                    SELECT strftime('%Y-%m', s.sale_date) as sale_month, SUM(s.quantity) as total_qty, SUM(s.amount) as total_amount
-                    FROM sales s
-                    WHERE s.sale_date BETWEEN ? AND ? AND s.branch_id = ?
-                    GROUP BY sale_month
-                    ORDER BY sale_month
-                ''', (report_start_date, report_end_date_adjusted, st.session_state.current_branch))
-                monthly_sales = c.fetchall()
-                
-                if monthly_sales:
-                    monthly_sales_list = []
-                    for sale in monthly_sales:
-                        monthly_sales_list.append({
-                            "الشهر": sale[0],
-                            "إجمالي الكمية": sale[1],
-                            "إجمالي المبلغ": f"{sale[2]:.2f} ريال"
-                        })
-                    
-                    df_monthly_sales = pd.DataFrame(monthly_sales_list)
-                    
-                    # Show monthly sales table
-                    st.subheader("المبيعات الشهرية")
-                    st.table(df_monthly_sales)
-                    
-                    # Add download button
-                    st.markdown(convert_df_to_csv_download_link(df_monthly_sales, "monthly_sales.csv"), unsafe_allow_html=True)
-                    
-                    # Show monthly sales chart
-                    st.subheader("رسم بياني للمبيعات الشهرية")
-                    
-                    # Extract amounts without "ريال" for plotting
-                    df_for_chart = pd.DataFrame({
-                        "الشهر": [sale[0] for sale in monthly_sales],
-                        "إجمالي المبيعات": [sale[2] for sale in monthly_sales]
-                    })
-                    
-                    fig = px.bar(df_for_chart, x="الشهر", y="إجمالي المبيعات", title="المبيعات الشهرية")
-                    st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.info("لا توجد مبيعات في الفترة المحددة")
-    # Reports
-    elif menu == "التقارير":
-        st.title("تقارير المخزون والمبيعات")
-        
-        report_type = st.selectbox("نوع التقرير", [
-            "تقرير المخزون الحالي", 
-            "تقرير المخزون المنخفض",
-            "تقرير المبيعات", 
-            "تقرير أداء المنتجات"
-        ])
-        
-        if report_type == "تقرير المخزون الحالي":
-            st.header(f"تقرير المخزون الحالي في {get_branch_name(st.session_state.current_branch)}")
-            
-            # Get inventory data with product info for current branch
-            c.execute('''
-                SELECT p.name, c.name, i.quantity, p.price, (p.price * i.quantity) as total_value
-                FROM inventory i
-                JOIN products p ON i.product_id = p.id
-                LEFT JOIN categories c ON p.category_id = c.id
-                WHERE i.branch_id = ? AND i.quantity > 0
-                ORDER BY p.name
-            ''', (st.session_state.current_branch,))
-            inventory_data = c.fetchall()
-            
-            if inventory_data:
-                inventory_list = []
-                for inv in inventory_data:
-                    inventory_list.append({
-                        "المنتج": inv[0],
-                        "الفئة": inv[1] or "غير مصنف",
-                        "الكمية": inv[2],
-                        "سعر الوحدة": f"{inv[3]} ريال" if inv[3] else "0.00 ريال",
-                        "القيمة الإجمالية": f"{inv[4]} ريال" if inv[4] else "0.00 ريال"
-                    })
-                
-                df_inventory = pd.DataFrame(inventory_list)
-                
-                # Calculate totals
-                total_items = sum(inv[2] for inv in inventory_data)
-                total_value = sum(inv[4] or 0 for inv in inventory_data)
-                
-                # Show summary metrics
-                col1, col2 = st.columns(2)
-                col1.metric("إجمالي عدد القطع", total_items)
-                col2.metric("إجمالي قيمة المخزون", f"{total_value:.2f} ريال")
-                
-                # Show inventory table
-                st.subheader("تفاصيل المخزون")
-                st.table(df_inventory)
-                
-                # Add download button
-                st.markdown(convert_df_to_csv_download_link(df_inventory, "inventory_report.csv"), unsafe_allow_html=True)
-                
-                # Show inventory by category pie chart
-                st.subheader("توزيع المخزون حسب الفئات")
-                
-                category_summary = df_inventory.groupby('الفئة')['الكمية'].sum().reset_index()
-                if not category_summary.empty and category_summary['الكمية'].sum() > 0:
-                    fig = px.pie(category_summary, values='الكمية', names='الفئة', hole=0.4)
-                    st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("لا توجد بيانات مخزون لعرضها")
-        
-        elif report_type == "تقرير المخزون المنخفض":
-            st.header("تقرير المخزون المنخفض")
-            
-            # Get low inventory items
-            threshold = st.slider("حد المخزون المنخفض", min_value=1, max_value=50, value=10)
-            
-            c.execute('''
-                SELECT p.name, c.name, i.quantity, p.price, b.name
-                FROM inventory i
-                JOIN products p ON i.product_id = p.id
-                LEFT JOIN categories c ON p.category_id = c.id
-                JOIN branches b ON i.branch_id = b.id
-                WHERE i.quantity <= ? 
-                ORDER BY i.quantity
-            ''', (threshold,))
-            low_inventory_data = c.fetchall()
-            
-            if low_inventory_data:
-                low_inventory_list = []
-                for inv in low_inventory_data:
-                    low_inventory_list.append({
-                        "المنتج": inv[0],
-                        "الفئة": inv[1] or "غير مصنف",
-                        "الكمية المتبقية": inv[2],
-                        "سعر الوحدة": f"{inv[3]} ريال" if inv[3] else "0.00 ريال",
-                        "الفرع": inv[4]
-                    })
-                
-                df_low_inventory = pd.DataFrame(low_inventory_list)
-                
-                # Show low inventory table
-                st.markdown('<div class="warning-box">تنبيه: المنتجات التالية منخفضة المخزون!</div>', unsafe_allow_html=True)
-                st.table(df_low_inventory)
-                
-                # Add download button
-                st.markdown(convert_df_to_csv_download_link(df_low_inventory, "low_inventory_report.csv"), unsafe_allow_html=True)
-            else:
-                st.success("لا توجد منتجات منخفضة المخزون حالياً.")
-        
-        elif report_type == "تقرير المبيعات":
-            st.header("تقرير المبيعات")
-            
-            # Date range filter
-            col1, col2 = st.columns(2)
-            with col1:
-                start_date = st.date_input("من تاريخ", value=datetime.now() - timedelta(days=30))
-            with col2:
-                end_date = st.date_input("إلى تاريخ", value=datetime.now())
-            
-            # Branch filter
-            all_branches = st.checkbox("جميع الفروع")
-            
-            if all_branches:
-                branch_filter = ""
-                branch_params = (start_date, end_date)
-            else:
-                branch_filter = "AND s.branch_id = ?"
-                branch_params = (start_date, end_date, st.session_state.current_branch)
-            
-            # Adjust end date to include the entire day
-            end_date_adjusted = datetime.combine(end_date, time.max).strftime("%Y-%m-%d %H:%M:%S")
-            
-            # Get sales data
-            c.execute(f'''
-                SELECT p.name, SUM(s.quantity) as total_quantity, SUM(s.amount) as total_amount, b.name
-                FROM sales s
-                JOIN products p ON s.product_id = p.id
-                JOIN branches b ON s.branch_id = b.id
-                WHERE s.sale_date BETWEEN ? AND ? {branch_filter}
-                GROUP BY p.name, b.name
-                ORDER BY total_amount DESC
-            ''', branch_params)
-            sales_data = c.fetchall()
-            
-            if sales_data:
-                sales_list = []
-                for sale in sales_data:
-                    sales_list.append({
-                        "المنتج": sale[0],
-                        "الكمية المباعة": sale[1],
-                        "إجمالي المبيعات": f"{sale[2]:.2f} ريال",
-                        "الفرع": sale[3]
-                    })
-                
-                df_sales = pd.DataFrame(sales_list)
-                
-                # Calculate totals
-                total_quantity = sum(sale[1] for sale in sales_data)
-                total_amount = sum(sale[2] for sale in sales_data)
-                
-                # Show summary metrics
-                col1, col2 = st.columns(2)
-                col1.metric("إجمالي القطع المباعة", total_quantity)
-                col2.metric("إجمالي المبيعات", f"{total_amount:.2f} ريال")
-                
-                # Show sales table
-                st.subheader("تفاصيل المبيعات")
-                st.table(df_sales)
-                
-                # Add download button
-                st.markdown(convert_df_to_csv_download_link(df_sales, "sales_report.csv"), unsafe_allow_html=True)
-                
-                # Show sales by branch pie chart
-                st.subheader("توزيع المبيعات حسب الفروع")
-                
-                branch_summary = df_sales.groupby('الفرع')['إجمالي المبيعات'].sum().reset_index()
-                branch_summary['إجمالي المبيعات'] = branch_summary['إجمالي المبيعات'].str.replace(' ريال', '').astype(float)
-                
-                if not branch_summary.empty and branch_summary['إجمالي المبيعات'].sum() > 0:
-                    fig = px.pie(branch_summary, values='إجمالي المبيعات', names='الفرع', hole=0.4)
-                    st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("لا توجد بيانات مبيعات في الفترة المحددة")
-        
-        elif report_type == "تقرير أداء المنتجات":
-            st.header("تقرير أداء المنتجات")
-            
-            # Date range filter
-            col1, col2 = st.columns(2)
-            with col1:
-                start_date = st.date_input("من تاريخ", value=datetime.now() - timedelta(days=90))
-            with col2:
-                end_date = st.date_input("إلى تاريخ", value=datetime.now())
-            
-            # Adjust end date to include the entire day
-            end_date_adjusted = datetime.combine(end_date, time.max).strftime("%Y-%m-%d %H:%M:%S")
-            
-            # Get product performance data
-            c.execute('''
-                SELECT 
-                    p.name,
-                    c.name,
-                    SUM(s.quantity) as total_sold,
-                    SUM(s.amount) as total_revenue,
-                    AVG(s.amount / s.quantity) as avg_unit_price,
-                    COUNT(DISTINCT s.id) as sale_count
-                FROM products p
-                LEFT JOIN categories c ON p.category_id = c.id
-                LEFT JOIN sales s ON p.id = s.product_id AND s.sale_date BETWEEN ? AND ?
-                GROUP BY p.id
-                ORDER BY total_revenue DESC NULLS LAST
-            ''', (start_date, end_date_adjusted))
-            performance_data = c.fetchall()
-            
-            if performance_data:
-                performance_list = []
-                for perf in performance_data:
-                    # Handle NULL values
-                    total_sold = perf[2] if perf[2] else 0
-                    total_revenue = perf[3] if perf[3] else 0
-                    avg_unit_price = perf[4] if perf[4] else 0
-                    sale_count = perf[5] if perf[5] else 0
-                    
-                    performance_list.append({
-                        "المنتج": perf[0],
-                        "الفئة": perf[1] or "غير مصنف",
-                        "الكمية المباعة": total_sold,
-                        "إجمالي الإيرادات": f"{total_revenue:.2f} ريال",
-                        "متوسط سعر البيع": f"{avg_unit_price:.2f} ريال",
-                        "عدد عمليات البيع": sale_count
-                    })
-                
-                df_performance = pd.DataFrame(performance_list)
-                
-                # Show performance table
-                st.subheader("تفاصيل أداء المنتجات")
-                st.table(df_performance)
-                
-                # Add download button
-                st.markdown(convert_df_to_csv_download_link(df_performance, "product_performance_report.csv"), unsafe_allow_html=True)
-                
-                # Show top products chart
-                st.subheader("أفضل 10 منتجات مبيعاً")
-                
-                # Filter out products with no sales
-                top_products = [(p[0], p[3] or 0) for p in performance_data if p[3]]
-                top_products.sort(key=lambda x: x[1], reverse=True)
-                top_products = top_products[:10]  # Take only top 10
-                
-                if top_products:
-                    df_top = pd.DataFrame(top_products, columns=["المنتج", "المبيعات"])
-                    fig = px.bar(df_top, x="المنتج", y="المبيعات", title="أفضل 10 منتجات من حيث المبيعات")
-                    st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.info("لا توجد بيانات مبيعات كافية للعرض في رسم بياني")
-            else:
-                st.info("لا توجد بيانات لعرضها")
+                except Exception as e:
+                    st.error(f"Error processing file: {str(e)}")
+        else:
+            st.warning("You don't have permission to process sales")
     
-    # Branch Management
-    elif menu == "إدارة الفروع":
-        st.title("إدارة الفروع")
+    # Sales history
+    st.markdown("### Sales History")
+    
+    if not st.session_state.sales:
+        st.info("No sales recorded yet")
+    else:
+        # Convert to DataFrame for display
+        sales_data = pd.DataFrame(st.session_state.sales)
         
-        tab1, tab2, tab3, tab4 = st.tabs(["إضافة فرع", "تعديل فرع", "حذف فرع", "عرض الفروع"])
+        # Date range filter
+        col1, col2 = st.columns(2)
         
-        with tab1:
-            st.header("إضافة فرع جديد")
-            
-            name = st.text_input("اسم الفرع")
-            address = st.text_input("عنوان الفرع")
-            description = st.text_area("وصف الفرع")
-            
-            if st.button("إضافة الفرع"):
-                if name:
-                    try:
-                        c.execute('''
-                            INSERT INTO branches (name, address, description)
-                            VALUES (?, ?, ?)
-                        ''', (name, address, description))
-                        
-                        # Get the new branch id
-                        branch_id = c.lastrowid
-                        
-                        # Add initial inventory entries for all products with 0 quantity
-                        c.execute('SELECT id FROM products')
-                        products = c.fetchall()
-                        
-                        for product_id in [p[0] for p in products]:
-                            c.execute('''
-                                INSERT INTO inventory (product_id, branch_id, quantity, last_updated)
-                                VALUES (?, ?, ?, ?)
-                            ''', (product_id, branch_id, 0, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-                        
-                        conn.commit()
-                        st.success(f"تم إضافة الفرع '{name}' بنجاح")
-                    except Exception as e:
-                        st.error(f"حدث خطأ أثناء إضافة الفرع: {e}")
-                else:
-                    st.warning("الرجاء إدخال اسم الفرع")
+        with col1:
+            min_date = datetime.strptime(min(sales_data['sale_date']), "%Y-%m-%d %H:%M:%S").date() if not sales_data.empty else datetime.now().date()
+            max_date = datetime.strptime(max(sales_data['sale_date']), "%Y-%m-%d %H:%M:%S").date() if not sales_data.empty else datetime.now().date()
+            start_date = st.date_input("From Date", min_date)
         
-        with tab2:
-            st.header("تعديل فرع")
-            
-            # Get branches for dropdown
-            c.execute("SELECT id, name FROM branches")
-            branches = c.fetchall()
-            branch_dict = {branch[0]: branch[1] for branch in branches}
-            
-            if branch_dict:
-                branch_id = st.selectbox("اختر الفرع للتعديل", options=list(branch_dict.keys()), format_func=lambda x: branch_dict[x])
-                
-                # Get current branch data
-                c.execute("SELECT name, address, description FROM branches WHERE id = ?", (branch_id,))
-                branch_data = c.fetchone()
-                
-                if branch_data:
-                    updated_name = st.text_input("اسم الفرع", value=branch_data[0])
-                    updated_address = st.text_input("عنوان الفرع", value=branch_data[1] or "")
-                    updated_description = st.text_area("وصف الفرع", value=branch_data[2] or "")
-                    
-                    if st.button("تحديث الفرع"):
-                        try:
-                            c.execute('''
-                                UPDATE branches
-                                SET name = ?, address = ?, description = ?
-                                WHERE id = ?
-                            ''', (updated_name, updated_address, updated_description, branch_id))
-                            
-                            conn.commit()
-                            st.success(f"تم تحديث الفرع '{updated_name}' بنجاح")
-                        except Exception as e:
-                            st.error(f"حدث خطأ أثناء تحديث الفرع: {e}")
-            else:
-                st.info("لا توجد فروع لتعديلها")
+        with col2:
+            end_date = st.date_input("To Date", max_date)
         
-        with tab3:
-            st.header("حذف فرع")
-            
-            if branch_dict:
-                branch_to_delete = st.selectbox("اختر الفرع للحذف", options=list(branch_dict.keys()), format_func=lambda x: branch_dict[x], key="delete_branch_select")
-                
-                # Check if branch has inventory or sales
-                c.execute("SELECT SUM(quantity) FROM inventory WHERE branch_id = ?", (branch_to_delete,))
-                inventory_count = c.fetchone()[0] or 0
-                
-                c.execute("SELECT COUNT(*) FROM sales WHERE branch_id = ?", (branch_to_delete,))
-                sales_count = c.fetchone()[0]
-                
-                # Prevent deleting the main branch or last remaining branch
-                is_main_branch = branch_to_delete == 1
-                is_last_branch = len(branch_dict) == 1
-                
-                if is_main_branch:
-                    st.error("لا يمكن حذف الفرع الرئيسي")
-                elif is_last_branch:
-                    st.error("لا يمكن حذف الفرع الأخير. يجب أن يكون هناك فرع واحد على الأقل")
-                else:
-                    st.write(f"الفرع: {branch_dict[branch_to_delete]}")
-                    
-                    if inventory_count > 0:
-                        st.warning(f"هذا الفرع لديه {inventory_count} قطعة في المخزون. تأكد من نقل المخزون أو تصفيره قبل الحذف.")
-                    
-                    if sales_count > 0:
-                        st.warning(f"هذا الفرع مرتبط بـ {sales_count} عمليات بيع سابقة.")
-                    
-                    # Confirmation checkbox
-                    confirm_delete = st.checkbox("أنا متأكد من حذف هذا الفرع وأتفهم أن هذا الإجراء لا يمكن التراجع عنه", key="confirm_delete_branch")
-                    
-                    if st.button("حذف الفرع") and confirm_delete:
-                        try:
-                            # Delete related inventory records
-                            c.execute("DELETE FROM inventory WHERE branch_id = ?", (branch_to_delete,))
-                            # Delete branch
-                            c.execute("DELETE FROM branches WHERE id = ?", (branch_to_delete,))
-                            
-                            conn.commit()
-                            st.success(f"تم حذف الفرع '{branch_dict[branch_to_delete]}' بنجاح")
-                            
-                            # Reset current_branch if it was deleted
-                            if st.session_state.current_branch == branch_to_delete:
-                                st.session_state.current_branch = 1  # Set to main branch
-                                st.rerun()
-                        except Exception as e:
-                            st.error(f"حدث خطأ أثناء حذف الفرع: {e}")
-            else:
-                st.info("لا توجد فروع لحذفها")
+        # Branch filter
+        branches = list(st.session_state.branches.keys())
+        selected_branches = st.multiselect("Filter by Branch", 
+                                         options=["All"] + branches,
+                                         format_func=lambda x: "All Branches" if x == "All" else st.session_state.branches[x]['name'],
+                                         default=["All"])
         
-        with tab4:
-            st.header("عرض الفروع")
-            
-            # Get all branches
-            c.execute('''
-                SELECT b.id, b.name, b.address, b.description,
-                       (SELECT COUNT(*) FROM inventory i WHERE i.branch_id = b.id) as inventory_count,
-                       (SELECT SUM(i.quantity) FROM inventory i WHERE i.branch_id = b.id) as total_items
-                FROM branches b
-                ORDER BY b.id
-            ''')
-            branches_data = c.fetchall()
-            
-            if branches_data:
-                branches_list = []
-                for branch in branches_data:
-                    branches_list.append({
-                        "المعرف": branch[0],
-                        "اسم الفرع": branch[1],
-                        "العنوان": branch[2] or "",
-                        "الوصف": branch[3] or "",
-                        "عدد المنتجات": branch[4],
-                        "إجمالي القطع": branch[5] or 0
-                    })
-                
-                df_branches = pd.DataFrame(branches_list)
-                st.table(df_branches)
-            else:
-                st.info("لا توجد فروع لعرضها")
-    # User Management (admin only)
-    elif menu == "إدارة المستخدمين" and st.session_state.role == 'admin':
-        st.title("إدارة المستخدمين")
+        # Category filter
+        if st.session_state.categories:
+            selected_categories = st.multiselect("Filter by Category", 
+                                              options=["All"] + st.session_state.categories,
+                                              default=["All"])
+        else:
+            selected_categories = ["All"]
         
-        tab1, tab2, tab3 = st.tabs(["إضافة مستخدم", "تعديل مستخدم", "عرض المستخدمين"])
+        # Apply filters
+        filtered_sales = sales_data.copy()
         
-        with tab1:
-            st.header("إضافة مستخدم جديد")
+        # Date filter
+        filtered_sales = filtered_sales[
+            (pd.to_datetime(filtered_sales['sale_date']).dt.date >= start_date) &
+            (pd.to_datetime(filtered_sales['sale_date']).dt.date <= end_date)
+        ]
+        
+        # Branch filter
+        if "All" not in selected_branches:
+            filtered_sales = filtered_sales[filtered_sales['branch_id'].isin(selected_branches)]
+        
+        # Category filter
+        if "All" not in selected_categories:
+            filtered_sales = filtered_sales[filtered_sales['category'].isin(selected_categories)]
+        
+        # Display filtered sales
+        if filtered_sales.empty:
+            st.info("No sales match the filter criteria")
+        else:
+            st.dataframe(filtered_sales, use_container_width=True)
             
-            col1, col2 = st.columns(2)
+            # Summary metrics
+            st.markdown("### Sales Summary")
+            col1, col2, col3 = st.columns(3)
             
             with col1:
-                username = st.text_input("اسم المستخدم")
-                password = st.text_input("كلمة المرور", type="password")
-                confirm_password = st.text_input("تأكيد كلمة المرور", type="password")
+                st.metric("Total Sales", len(filtered_sales))
             
             with col2:
-                role = st.selectbox("الدور", ["مستخدم", "مشرف", "admin"])
-                active = st.checkbox("نشط", value=True)
-                
-                permissions_options = ["view", "add", "edit", "delete", "manage_users"]
-                permissions = st.multiselect("الصلاحيات", options=permissions_options, default=["view"])
-            
-            if st.button("إضافة المستخدم"):
-                if not username:
-                    st.error("الرجاء إدخال اسم المستخدم")
-                elif not password:
-                    st.error("الرجاء إدخال كلمة المرور")
-                elif password != confirm_password:
-                    st.error("كلمة المرور وتأكيدها غير متطابقين")
+                # Calculate total revenue if sale_price column has values
+                if 'sale_price' in filtered_sales.columns and filtered_sales['sale_price'].notna().any():
+                    total_revenue = filtered_sales['sale_price'].sum()
+                    st.metric("Total Revenue", f"${total_revenue:.2f}")
                 else:
-                    try:
-                        # Check if username already exists
-                        c.execute("SELECT id FROM users WHERE username = ?", (username,))
-                        if c.fetchone():
-                            st.error("اسم المستخدم موجود بالفعل. الرجاء اختيار اسم مستخدم آخر.")
-                        else:
-                            # Insert new user
-                            hashed_password = hash_password(password)
-                            permissions_str = ",".join(permissions)
-                            
-                            c.execute('''
-                                INSERT INTO users (username, password, role, permissions, active)
-                                VALUES (?, ?, ?, ?, ?)
-                            ''', (username, hashed_password, role, permissions_str, 1 if active else 0))
-                            
-                            conn.commit()
-                            st.success(f"تم إضافة المستخدم '{username}' بنجاح")
-                    except Exception as e:
-                        st.error(f"حدث خطأ أثناء إضافة المستخدم: {e}")
+                    st.metric("Total Revenue", "N/A")
+            
+            with col3:
+                categories_count = filtered_sales['category'].value_counts()
+                most_common_category = categories_count.index[0] if not categories_count.empty else "None"
+                st.metric("Top Category", most_common_category, categories_count[most_common_category] if not categories_count.empty else 0)
+            
+            # Sales trends
+            st.markdown("### Sales Trends")
+            
+            # Add date column for easier grouping
+            filtered_sales['date'] = pd.to_datetime(filtered_sales['sale_date']).dt.date
+            
+            # Group by date
+            daily_sales = filtered_sales.groupby('date').size().reset_index(name='count')
+            daily_sales['date'] = pd.to_datetime(daily_sales['date'])
+            
+            # Line chart for sales over time
+            fig = px.line(daily_sales, x='date', y='count', title='Daily Sales')
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Category distribution
+            st.markdown("### Category Distribution")
+            category_counts = filtered_sales['category'].value_counts().reset_index()
+            category_counts.columns = ['Category', 'Count']
+            
+            if not category_counts.empty:
+                fig = px.pie(category_counts, names='Category', values='Count', hole=0.4)
+                st.plotly_chart(fig, use_container_width=True)
+            
+            # Branch distribution
+            st.markdown("### Branch Distribution")
+            branch_counts = filtered_sales['branch_id'].value_counts().reset_index()
+            branch_counts.columns = ['Branch', 'Count']
+            branch_counts['Branch Name'] = branch_counts['Branch'].apply(lambda x: st.session_state.branches[x]['name'])
+            
+            if not branch_counts.empty:
+                fig = px.bar(branch_counts, x='Branch Name', y='Count', title='Sales by Branch')
+                st.plotly_chart(fig, use_container_width=True)
+def reports_tab():
+    if not require_permission("view"):
+        return
+    
+    st.markdown('<div class="subheader">Reports & Analytics</div>', unsafe_allow_html=True)
+    
+    # Report types
+    report_type = st.radio("Select Report Type", 
+                         options=["Inventory Summary", "Sales Analysis", "Transaction History", "Transfer History"],
+                         horizontal=True)
+    
+    if report_type == "Inventory Summary":
+        st.markdown("### Inventory Summary Report")
         
-        with tab2:
-            st.header("تعديل مستخدم")
-            
-            # Get users for dropdown
-            c.execute("SELECT id, username FROM users")
-            users = c.fetchall()
-            user_dict = {user[0]: user[1] for user in users}
-            
-            if user_dict:
-                user_id = st.selectbox("اختر المستخدم للتعديل", options=list(user_dict.keys()), format_func=lambda x: user_dict[x])
-                
-                # Get current user data
-                c.execute("SELECT username, role, permissions, active FROM users WHERE id = ?", (user_id,))
-                user_data = c.fetchone()
-                
-                if user_data:
-                    username = user_data[0]
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        updated_username = st.text_input("اسم المستخدم", value=username)
-                        update_password = st.checkbox("تحديث كلمة المرور")
-                        updated_password = st.text_input("كلمة المرور الجديدة", type="password") if update_password else None
-                        confirm_updated_password = st.text_input("تأكيد كلمة المرور الجديدة", type="password") if update_password else None
-                    
-                    with col2:
-                        updated_role = st.selectbox("الدور", ["مستخدم", "مشرف", "admin"], index=["مستخدم", "مشرف", "admin"].index(user_data[1]))
-                        updated_active = st.checkbox("نشط", value=user_data[3])
-                        
-                        current_permissions = user_data[2].split(",") if user_data[2] else []
-                        permissions_options = ["view", "add", "edit", "delete", "manage_users"]
-                        updated_permissions = st.multiselect("الصلاحيات", options=permissions_options, default=current_permissions)
-                    
-                    # Prevent changing admin user status if it's the admin user
-                    is_admin_user = username == "admin"
-                    if is_admin_user:
-                        st.warning("المستخدم 'admin' هو مستخدم النظام الرئيسي. بعض الإعدادات لا يمكن تغييرها.")
-                        updated_role = "admin"
-                        updated_active = True
-                    
-                    if st.button("تحديث المستخدم"):
-                        try:
-                            # Validate data
-                            error = None
-                            
-                            if update_password and not updated_password:
-                                error = "الرجاء إدخال كلمة المرور الجديدة"
-                            elif update_password and updated_password != confirm_updated_password:
-                                error = "كلمة المرور الجديدة وتأكيدها غير متطابقين"
-                            
-                            if error:
-                                st.error(error)
-                            else:
-                                # Update user
-                                updates = []
-                                params = []
-                                
-                                if updated_username != username:
-                                    # Check if new username already exists
-                                    c.execute("SELECT id FROM users WHERE username = ? AND id != ?", (updated_username, user_id))
-                                    if c.fetchone():
-                                        st.error("اسم المستخدم موجود بالفعل. الرجاء اختيار اسم مستخدم آخر.")
-                                        return
-                                    
-                                    updates.append("username = ?")
-                                    params.append(updated_username)
-                                
-                                if update_password:
-                                    updates.append("password = ?")
-                                    params.append(hash_password(updated_password))
-                                
-                                if not is_admin_user:
-                                    updates.append("role = ?")
-                                    params.append(updated_role)
-                                    
-                                    updates.append("active = ?")
-                                    params.append(1 if updated_active else 0)
-                                
-                                updates.append("permissions = ?")
-                                params.append(",".join(updated_permissions))
-                                
-                                # Add user_id to params
-                                params.append(user_id)
-                                
-                                c.execute(f'''
-                                    UPDATE users
-                                    SET {", ".join(updates)}
-                                    WHERE id = ?
-                                ''', params)
-                                
-                                conn.commit()
-                                st.success(f"تم تحديث المستخدم '{updated_username}' بنجاح")
-                        except Exception as e:
-                            st.error(f"حدث خطأ أثناء تحديث المستخدم: {e}")
-            else:
-                st.info("لا يوجد مستخدمين لتعديلهم")
+        # Calculate inventory statistics
+        if not st.session_state.rfid_data:
+            st.info("No inventory data available")
+            return
         
-        with tab3:
-            st.header("عرض المستخدمين")
+        # Convert to DataFrame for analysis
+        inventory_data = []
+        for rfid, data in st.session_state.rfid_data.items():
+            product_id = data['product_id']
+            product_name = st.session_state.products[product_id]['name'] if product_id in st.session_state.products else "Unknown"
+            category = data['category']
+            branch_id = data['branch_id']
+            branch_name = st.session_state.branches[branch_id]['name'] if branch_id in st.session_state.branches else "Unknown"
+            added_at = data['added_at']
             
-            # Get all users
-            c.execute("SELECT id, username, role, permissions, active, created_at FROM users ORDER BY id")
-            users_data = c.fetchall()
-            
-            if users_data:
-                users_list = []
-                for user in users_data:
-                    users_list.append({
-                        "المعرف": user[0],
-                        "اسم المستخدم": user[1],
-                        "الدور": user[2],
-                        "الصلاحيات": user[3],
-                        "الحالة": "نشط" if user[4] else "غير نشط",
-                        "تاريخ الإنشاء": user[5]
-                    })
-                
-                df_users = pd.DataFrame(users_list)
-                st.table(df_users)
-                
-                # Add option to delete users
-                st.subheader("حذف مستخدم")
-                
-                # Cannot delete admin user
-                delete_user_dict = {u[0]: u[1] for u in users_data if u[1] != "admin"}
-                
-                if delete_user_dict:
-                    user_to_delete = st.selectbox("اختر المستخدم للحذف", options=list(delete_user_dict.keys()), format_func=lambda x: delete_user_dict[x])
-                    
-                    # Confirmation checkbox
-                    confirm_delete = st.checkbox("أنا متأكد من حذف هذا المستخدم وأتفهم أن هذا الإجراء لا يمكن التراجع عنه", key="confirm_delete_user")
-                    
-                    if st.button("حذف المستخدم") and confirm_delete:
-                        try:
-                            c.execute("DELETE FROM users WHERE id = ?", (user_to_delete,))
-                            conn.commit()
-                            st.success(f"تم حذف المستخدم '{delete_user_dict[user_to_delete]}' بنجاح")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"حدث خطأ أثناء حذف المستخدم: {e}")
-                else:
-                    st.info("لا يمكن حذف المستخدم الرئيسي")
+            inventory_data.append({
+                'RFID': rfid,
+                'Product ID': product_id,
+                'Product Name': product_name,
+                'Category': category,
+                'Branch ID': branch_id,
+                'Branch Name': branch_name,
+                'Added At': added_at
+            })
+        
+        inventory_df = pd.DataFrame(inventory_data)
+        
+        # Summary metrics
+        st.markdown("#### Overall Metrics")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("Total Items", len(inventory_df))
+        
+        with col2:
+            unique_products = inventory_df['Product ID'].nunique()
+            st.metric("Unique Products", unique_products)
+        
+        with col3:
+            unique_categories = inventory_df['Category'].nunique()
+            st.metric("Categories", unique_categories)
+        
+        with col4:
+            unique_branches = inventory_df['Branch ID'].nunique()
+            st.metric("Branches", unique_branches)
+        
+        # Category breakdown
+        st.markdown("#### Category Breakdown")
+        category_counts = inventory_df['Category'].value_counts().reset_index()
+        category_counts.columns = ['Category', 'Count']
+        
+        if not category_counts.empty:
+            fig = px.pie(category_counts, names='Category', values='Count', title='Inventory by Category')
+            st.plotly_chart(fig, use_container_width=True)
+        
+        # Branch breakdown
+        st.markdown("#### Branch Breakdown")
+        branch_counts = inventory_df['Branch Name'].value_counts().reset_index()
+        branch_counts.columns = ['Branch', 'Count']
+        
+        if not branch_counts.empty:
+            fig = px.bar(branch_counts, x='Branch', y='Count', title='Inventory by Branch')
+            st.plotly_chart(fig, use_container_width=True)
+        
+        # Product breakdown
+        st.markdown("#### Top Products")
+        product_counts = inventory_df['Product Name'].value_counts().reset_index()
+        product_counts.columns = ['Product', 'Count']
+        
+        if not product_counts.empty:
+            top_products = product_counts.head(10)  # Top 10 products
+            fig = px.bar(top_products, x='Product', y='Count', title='Top 10 Products in Inventory')
+            st.plotly_chart(fig, use_container_width=True)
+        
+        # Raw data table
+        with st.expander("View Raw Inventory Data"):
+            st.dataframe(inventory_df, use_container_width=True)
+    
+    elif report_type == "Sales Analysis":
+        st.markdown("### Sales Analysis Report")
+        
+        if not st.session_state.sales:
+            st.info("No sales data available")
+            return
+        
+        # Convert to DataFrame for analysis
+        sales_df = pd.DataFrame(st.session_state.sales)
+        
+        # Add datetime column
+        sales_df['datetime'] = pd.to_datetime(sales_df['sale_date'])
+        sales_df['date'] = sales_df['datetime'].dt.date
+        
+        # Date range filter
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            min_date = sales_df['date'].min() if not sales_df.empty else datetime.now().date()
+            start_date = st.date_input("From Date", min_date, key="sales_start_date")
+        
+        with col2:
+            max_date = sales_df['date'].max() if not sales_df.empty else datetime.now().date()
+            end_date = st.date_input("To Date", max_date, key="sales_end_date")
+        
+        # Apply date filter
+        filtered_sales = sales_df[
+            (sales_df['date'] >= start_date) &
+            (sales_df['date'] <= end_date)
+        ]
+        
+        # Summary metrics
+        st.markdown("#### Sales Metrics")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("Total Sales", len(filtered_sales))
+        
+        with col2:
+            if 'sale_price' in filtered_sales.columns and filtered_sales['sale_price'].notna().any():
+                total_revenue = filtered_sales['sale_price'].sum()
+                st.metric("Total Revenue", f"${total_revenue:.2f}")
             else:
-                st.info("لا يوجد مستخدمين لعرضهم")
+                st.metric("Total Revenue", "N/A")
+        
+        with col3:
+            unique_products = filtered_sales['product_id'].nunique()
+            st.metric("Products Sold", unique_products)
+        
+        with col4:
+            unique_categories = filtered_sales['category'].nunique()
+            st.metric("Categories Sold", unique_categories)
+        
+        # Sales over time
+        st.markdown("#### Sales Trend")
+        daily_sales = filtered_sales.groupby('date').size().reset_index(name='count')
+        
+        if not daily_sales.empty:
+            fig = px.line(daily_sales, x='date', y='count', title='Daily Sales')
+            st.plotly_chart(fig, use_container_width=True)
+        
+        # Category breakdown
+        st.markdown("#### Category Sales")
+        category_counts = filtered_sales['category'].value_counts().reset_index()
+        category_counts.columns = ['Category', 'Count']
+        
+        if not category_counts.empty:
+            fig = px.pie(category_counts, names='Category', values='Count', title='Sales by Category')
+            st.plotly_chart(fig, use_container_width=True)
+        
+        # Branch breakdown
+        st.markdown("#### Branch Sales")
+        branch_counts = filtered_sales['branch_id'].value_counts().reset_index()
+        branch_counts.columns = ['Branch', 'Count']
+        
+        # Add branch names
+        branch_counts['Branch Name'] = branch_counts['Branch'].apply(
+            lambda x: st.session_state.branches[x]['name'] if x in st.session_state.branches else "Unknown")
+        
+        if not branch_counts.empty:
+            fig = px.bar(branch_counts, x='Branch Name', y='Count', title='Sales by Branch')
+            st.plotly_chart(fig, use_container_width=True)
+        
+        # Raw data table
+        with st.expander("View Raw Sales Data"):
+            st.dataframe(filtered_sales, use_container_width=True)
+    
+    elif report_type == "Transaction History":
+        st.markdown("### Transaction History Report")
+        
+        if not st.session_state.transactions:
+            st.info("No transaction data available")
+            return
+        
+        # Convert to DataFrame for analysis
+        transactions_df = pd.DataFrame(st.session_state.transactions)
+        
+        # Add datetime column
+        transactions_df['datetime'] = pd.to_datetime(transactions_df['timestamp'])
+        transactions_df['date'] = transactions_df['datetime'].dt.date
+        
+        # Date range filter
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            min_date = transactions_df['date'].min() if not transactions_df.empty else datetime.now().date()
+            start_date = st.date_input("From Date", min_date, key="trans_start_date")
+        
+        with col2:
+            max_date = transactions_df['date'].max() if not transactions_df.empty else datetime.now().date()
+            end_date = st.date_input("To Date", max_date, key="trans_end_date")
+        
+        # Action type filter
+        actions = transactions_df['action'].unique().tolist()
+        selected_actions = st.multiselect("Filter by Action Type", options=["All"] + actions, default=["All"])
+        
+        # Apply filters
+        filtered_trans = transactions_df[
+            (transactions_df['date'] >= start_date) &
+            (transactions_df['date'] <= end_date)
+        ]
+        
+        if "All" not in selected_actions:
+            filtered_trans = filtered_trans[filtered_trans['action'].isin(selected_actions)]
+        
+        # Summary metrics
+        st.markdown("#### Transaction Metrics")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Total Transactions", len(filtered_trans))
+        
+        with col2:
+            action_counts = filtered_trans['action'].value_counts()
+            most_common_action = action_counts.index[0] if not action_counts.empty else "None"
+            st.metric("Most Common Action", most_common_action, action_counts[most_common_action] if not action_counts.empty else 0)
+        
+        with col3:
+            unique_products = filtered_trans['product_id'].nunique()
+            st.metric("Unique Products", unique_products)
+        
+        # Transactions over time
+        st.markdown("#### Transaction Trend")
+        daily_trans = filtered_trans.groupby('date').size().reset_index(name='count')
+        
+        if not daily_trans.empty:
+            fig = px.line(daily_trans, x='date', y='count', title='Daily Transactions')
+            st.plotly_chart(fig, use_container_width=True)
+        
+        # Action type breakdown
+        st.markdown("#### Action Type Breakdown")
+        action_counts = filtered_trans['action'].value_counts().reset_index()
+        action_counts.columns = ['Action', 'Count']
+        
+        if not action_counts.empty:
+            fig = px.pie(action_counts, names='Action', values='Count', title='Transactions by Action Type')
+            st.plotly_chart(fig, use_container_width=True)
+        
+        # Raw data table
+        with st.expander("View Raw Transaction Data"):
+            st.dataframe(filtered_trans, use_container_width=True)
+    
+    elif report_type == "Transfer History":
+        st.markdown("### Transfer History Report")
+        
+        if not st.session_state.transfers:
+            st.info("No transfer data available")
+            return
+        
+        # Convert to DataFrame for analysis
+        transfers_df = pd.DataFrame(st.session_state.transfers)
+        
+        # Add datetime column
+        transfers_df['datetime'] = pd.to_datetime(transfers_df['timestamp'])
+        transfers_df['date'] = transfers_df['datetime'].dt.date
+        
+        # Date range filter
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            min_date = transfers_df['date'].min() if not transfers_df.empty else datetime.now().date()
+            start_date = st.date_input("From Date", min_date, key="transfer_start_date")
+        
+        with col2:
+            max_date = transfers_df['date'].max() if not transfers_df.empty else datetime.now().date()
+            end_date = st.date_input("To Date", max_date, key="transfer_end_date")
+        
+        # Branch filter
+        branches = list(st.session_state.branches.keys())
+        from_branches = st.multiselect("From Branch", 
+                                    options=["All"] + branches,
+                                    format_func=lambda x: "All" if x == "All" else st.session_state.branches[x]['name'],
+                                    default=["All"])
+        
+        to_branches = st.multiselect("To Branch", 
+                                  options=["All"] + branches,
+                                  format_func=lambda x: "All" if x == "All" else st.session_state.branches[x]['name'],
+                                  default=["All"])
+        
+        # Apply filters
+        filtered_transfers = transfers_df[
+            (transfers_df['date'] >= start_date) &
+            (transfers_df['date'] <= end_date)
+        ]
+        
+        if "All" not in from_branches:
+            filtered_transfers = filtered_transfers[filtered_transfers['from_branch_id'].isin(from_branches)]
+        
+        if "All" not in to_branches:
+            filtered_transfers = filtered_transfers[filtered_transfers['to_branch_id'].isin(to_branches)]
+        
+        # Summary metrics
+        st.markdown("#### Transfer Metrics")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Total Transfers", len(filtered_transfers))
+        
+        with col2:
+            unique_products = filtered_transfers['product_id'].nunique()
+            st.metric("Products Transferred", unique_products)
+        
+        with col3:
+            unique_branches_involved = set(filtered_transfers['from_branch_id'].tolist() + filtered_transfers['to_branch_id'].tolist())
+            st.metric("Branches Involved", len(unique_branches_involved))
+        
+        # Transfers over time
+        st.markdown("#### Transfer Trend")
+        daily_transfers = filtered_transfers.groupby('date').size().reset_index(name='count')
+        
+        if not daily_transfers.empty:
+            fig = px.line(daily_transfers, x='date', y='count', title='Daily Transfers')
+            st.plotly_chart(fig, use_container_width=True)
+        
+        # Branch flow analysis
+        st.markdown("#### Branch Transfer Flow")
+        branch_flow = filtered_transfers.groupby(['from_branch_id', 'to_branch_id']).size().reset_index(name='count')
+        
+        # Add branch names
+        branch_flow['From Branch'] = branch_flow['from_branch_id'].apply(
+            lambda x: st.session_state.branches[x]['name'] if x in st.session_state.branches else "Unknown")
+        branch_flow['To Branch'] = branch_flow['to_branch_id'].apply(
+            lambda x: st.session_state.branches[x]['name'] if x in st.session_state.branches else "Unknown")
+        
+        if not branch_flow.empty:
+            fig = px.bar(branch_flow, x='From Branch', y='count', color='To Branch',
+                        title='Transfer Flow Between Branches')
+            st.plotly_chart(fig, use_container_width=True)
+        
+        # Raw data table
+        with st.expander("View Raw Transfer Data"):
+            display_cols = ['rfid', 'product_id', 'product_name', 'from_branch_id', 'to_branch_id', 'timestamp']
+            st.dataframe(filtered_transfers[display_cols], use_container_width=True)
 
-# Main execution
-if __name__ == "__main__":
-    if st.session_state.authenticated:
-        main_app()
+def users_tab():
+    if not has_permission("manage_users"):
+        st.error("You don't have permission to manage users")
+        return
+    
+    st.markdown('<div class="subheader">User Management</div>', unsafe_allow_html=True)
+    
+    # Add new user
+    with st.expander("Add New User", expanded=False):
+        with st.form("add_user_form"):
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            confirm_password = st.text_input("Confirm Password", type="password")
+            name = st.text_input("Full Name")
+            
+            role_options = ["user", "manager", "admin"]
+            role = st.selectbox("Role", options=role_options)
+            
+            permission_options = ["view", "add", "edit", "delete", "manage_users"]
+            permissions = st.multiselect("Permissions", options=permission_options)
+            
+            submit = st.form_submit_button("Add User")
+            
+            if submit:
+                if username and password and confirm_password:
+                    if password == confirm_password:
+                        if username in st.session_state.users:
+                            st.error(f"User {username} already exists")
+                        else:
+                            success, message = add_user(username, password, role, permissions, name)
+                            if success:
+                                st.success(message)
+                            else:
+                                st.error(message)
+                    else:
+                        st.error("Passwords do not match")
+                else:
+                    st.error("Username and password are required")
+    
+    # Manage existing users
+    st.markdown("### Existing Users")
+    
+    if not st.session_state.users:
+        st.info("No users found")
     else:
-        show_login()
+        users_data = []
+        for username, user_data in st.session_state.users.items():
+            users_data.append({
+                'Username': username,
+                'Name': user_data.get('name', username),
+                'Role': user_data.get('role', 'user'),
+                'Active': user_data.get('active', True),
+                'Permissions': ", ".join(user_data.get('permissions', [])),
+                'Created': user_data.get('created_at', 'Unknown')
+            })
+        
+        users_df = pd.DataFrame(users_data)
+        st.dataframe(users_df, use_container_width=True)
+        
+        # Edit user
+        st.markdown("### Edit User")
+        
+        user_to_edit = st.selectbox("Select User to Edit", 
+                                 options=list(st.session_state.users.keys()),
+                                 format_func=lambda x: f"{x} ({st.session_state.users[x].get('name', '')})")
+        
+        if user_to_edit:
+            user_data = st.session_state.users[user_to_edit]
+            
+            with st.form("edit_user_form"):
+                name = st.text_input("Full Name", value=user_data.get('name', ''))
+                
+                change_password = st.checkbox("Change Password")
+                password = st.text_input("New Password", type="password", disabled=not change_password)
+                confirm_password = st.text_input("Confirm New Password", type="password", disabled=not change_password)
+                
+                role_options = ["user", "manager", "admin"]
+                role_index = role_options.index(user_data.get('role', 'user')) if user_data.get('role', 'user') in role_options else 0
+                role = st.selectbox("Role", options=role_options, index=role_index)
+                
+                permission_options = ["view", "add", "edit", "delete", "manage_users"]
+                permissions = st.multiselect("Permissions", 
+                                          options=permission_options, 
+                                          default=user_data.get('permissions', []))
+                
+                active = st.checkbox("Active", value=user_data.get('active', True))
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    submit = st.form_submit_button("Update User")
+                
+                with col2:
+                    delete = st.form_submit_button("Delete User", type="primary")
+                
+                if submit:
+                    if change_password:
+                        if not password or not confirm_password:
+                            st.error("Please enter both password fields")
+                        elif password != confirm_password:
+                            st.error("Passwords do not match")
+                        else:
+                            success, message = update_user(user_to_edit, password=password, role=role, permissions=permissions, active=active, name=name)
+                            if success:
+                                st.success(message)
+                            else:
+                                st.error(message)
+                    else:
+                        success, message = update_user(user_to_edit, role=role, permissions=permissions, active=active, name=name)
+                        if success:
+                            st.success(message)
+                        else:
+                            st.error(message)
+                
+                if delete:
+                    success, message = delete_user(user_to_edit)
+                    if success:
+                        st.success(message)
+                        st.rerun()
+                    else:
+                        st.error(message)
+
+# Main application
+def main():
+    load_css()
+    
+    # Check if user is authenticated
+    if not st.session_state.authenticated:
+        show_login_page()
+    else:
+        # Display header with user info
+        col1, col2, col3 = st.columns([2, 3, 1])
+        
+        with col1:
+            st.markdown('<div class="main-header">RFID Inventory Management System</div>', unsafe_allow_html=True)
+        
+        with col2:
+            st.markdown(f"""
+            <div class="user-info">
+                Logged in as: <b>{st.session_state.user_name}</b> ({st.session_state.user_role})
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col3:
+            if st.button("Logout"):
+                st.session_state.authenticated = False
+                st.session_state.current_user = None
+                st.session_state.user_role = None
+                st.session_state.user_permissions = []
+                st.session_state.user_name = None
+                st.rerun()
+        
+        # Create tabs
+        tabs = ["Upload", "Products", "Inventory", "Sales", "Reports"]
+        
+        # Add Users tab if user has permission
+        if has_permission("manage_users"):
+            tabs.append("Users")
+        
+        selected_tab = st.tabs(tabs)
+        
+        with selected_tab[0]:
+            upload_tab()
+        
+        with selected_tab[1]:
+            product_tab()
+        
+        with selected_tab[2]:
+            inventory_tab()
+        
+        with selected_tab[3]:
+            sales_tab()
+        
+        with selected_tab[4]:
+            reports_tab()
+        
+        if has_permission("manage_users") and len(tabs) > 5:
+            with selected_tab[5]:
+                users_tab()
+
+# Run the application
+if __name__ == "__main__":
+    main()
